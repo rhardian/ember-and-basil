@@ -1,4 +1,4 @@
-// Spatial kitchen station layout, station state initialization, and tile collision helpers.
+// Spatial kitchen layout with 8 fresh pantry crates, dual copper pots, skillets, 420°C brick oven, and dining pass.
 
 import { GRID_COLS, GRID_ORIGIN_X, GRID_ORIGIN_Y, GRID_ROWS, TILE_SIZE } from './config.js';
 
@@ -17,7 +17,7 @@ export const STATION_TYPES = {
 };
 
 const LAYOUT_BLUEPRINT = [
-  // Row 0: Fresh Pantry Crates (cols 0..5) + Hot Cooking Line (cols 6..11)
+  // Row 0: Fresh Pantry Line (cols 0..5) + Live °C Hot Cooking Line (cols 6..11)
   { col: 0, row: 0, type: STATION_TYPES.PANTRY, ingredient: 'tomato', label: 'Tomato' },
   { col: 1, row: 0, type: STATION_TYPES.PANTRY, ingredient: 'basil', label: 'Basil' },
   { col: 2, row: 0, type: STATION_TYPES.PANTRY, ingredient: 'mushroom', label: 'Porcini' },
@@ -31,8 +31,8 @@ const LAYOUT_BLUEPRINT = [
   { col: 10, row: 0, type: STATION_TYPES.OVEN, ovenSide: 'left', label: 'Stone Oven 1' },
   { col: 11, row: 0, type: STATION_TYPES.OVEN, ovenSide: 'right', label: 'Stone Oven 2' },
 
-  // Row 2: West Plate Stack + Central Butcher-Block Assembly Island + East Warm Pass Shelf
-  { col: 0, row: 2, type: STATION_TYPES.PLATE_STACK, label: 'Plates' },
+  // Row 2: Coastal Salmon Ice Tray + Central Butcher-Block Prep & Assembly Island + Warm Service Pass
+  { col: 0, row: 2, type: STATION_TYPES.PANTRY, ingredient: 'salmon', label: 'Salmon' },
   { col: 3, row: 2, type: STATION_TYPES.CHOP, label: 'Chop Board 1' },
   { col: 4, row: 2, type: STATION_TYPES.CHOP, label: 'Chop Board 2' },
   { col: 5, row: 2, type: STATION_TYPES.COUNTER, role: 'assembly', label: 'Assembly 1' },
@@ -41,17 +41,17 @@ const LAYOUT_BLUEPRINT = [
   { col: 8, row: 2, type: STATION_TYPES.PLATE_STACK, label: 'Warm Plates' },
   { col: 11, row: 2, type: STATION_TYPES.PASS_HOLD, label: 'Warm Pass' },
 
-  // Row 3: West Prep Bench + East Brass Service Bell
-  { col: 0, row: 3, type: STATION_TYPES.COUNTER, role: 'prep', label: 'Prep Counter' },
+  // Row 3: Golden Saffron & Lemon Crate + Brass Service Pass Bell
+  { col: 0, row: 3, type: STATION_TYPES.PANTRY, ingredient: 'saffron', label: 'Saffron' },
   { col: 11, row: 3, type: STATION_TYPES.SERVE_BELL, label: 'Serve Pass' },
 
-  // Row 4: Compost Bin + Front Oak Prep Rail + Served Dish Showcase
+  // Row 4: Compost Bin + Front Oak Prep Rail & Plate Stack 2 + Dining Pass Showcase
   { col: 0, row: 4, type: STATION_TYPES.COMPOST, label: 'Compost' },
-  { col: 3, row: 4, type: STATION_TYPES.COUNTER, role: 'prep', label: 'Spice Counter' },
+  { col: 3, row: 4, type: STATION_TYPES.PLATE_STACK, label: 'Plates' },
   { col: 4, row: 4, type: STATION_TYPES.CHOP, label: 'Chop Board 3' },
   { col: 5, row: 4, type: STATION_TYPES.COUNTER, role: 'assembly', label: 'Plating Bench' },
   { col: 6, row: 4, type: STATION_TYPES.COUNTER, role: 'assembly', label: 'Holding Bench' },
-  { col: 7, row: 4, type: STATION_TYPES.COUNTER, role: 'prep', label: 'Prep Bench' },
+  { col: 7, row: 4, type: STATION_TYPES.COUNTER, role: 'spice', label: 'Spice Counter' },
   { col: 8, row: 4, type: STATION_TYPES.COUNTER, role: 'prep', label: 'Staging Bench' },
   { col: 11, row: 4, type: STATION_TYPES.SHOWCASE, label: 'Dining Pass' },
 ];
@@ -69,23 +69,18 @@ export function createKitchen() {
       role: spec.role ?? null,
       ovenSide: spec.ovenSide ?? null,
       item: null,
-      cook: null, // { inputId, outputId, elapsed, readyTime, sweetEnd, warnTime, burnTime, state }
+      cook: null,
       chopProgress: 0,
       bellPulse: 0,
       highlightPulse: 0,
       bounce: 0,
-      showcase: null, // { dishId, perfect, payout, tip, combo, timer }
+      showcase: null,
     };
     grid[spec.row][spec.col] = station;
     return station;
   });
 
-  return {
-    cols: GRID_COLS,
-    rows: GRID_ROWS,
-    grid,
-    stations,
-  };
+  return { cols: GRID_COLS, rows: GRID_ROWS, grid, stations };
 }
 
 export function getStationAt(kitchen, col, row) {

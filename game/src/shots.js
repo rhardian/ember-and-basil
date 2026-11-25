@@ -1,24 +1,23 @@
-// Deterministic real-gameplay autopilot staging for ?shot=rush|sear|fever|title captures.
-// Runs the genuine chef pathfinding, chopping, searing, simmering, oven baking, and serving rules.
+// Deterministic real-gameplay dual-chef autopilot staging for 4 distinct 1280x800 captures across all 3 biomes & upgrades.
 
-import { FIXED_STEP, SHIFTS, tileCenter } from './config.js';
-import {
-  advanceChopping,
-  interactWithStation,
-  updateKitchenStations,
-} from './cooking.js';
 import {
   commandChefToStation,
-  createChef,
+  createBrigade,
   selectTargetStation,
   triggerChefDash,
   updateChefMovement,
 } from './chef.js';
+import { FIXED_STEP, SHIFTS, TILE_SIZE, tileCenter } from './config.js';
+import { advanceChopping, interactWithStation, updateKitchenStations } from './cooking.js';
+import { createDiningRoom, updateDiningGuests } from './diners.js';
 import { createKitchen, getStationAt } from './kitchen.js';
 import { createOrderSystem, spawnOrderTicket, updateOrders } from './orders.js';
 import { bindParticleHelpers, createParticleSystem, updateParticles } from './particles.js';
 import { createRng } from './random.js';
+import { INGREDIENTS } from './recipes.js';
 import { SCREEN_MODES } from './renderer.js';
+import { createProceduralTextures } from './textures.js';
+import { createUpgradeState, getUpgradeModifiers, purchaseKitchenUpgrade } from './upgrades.js';
 
 function createSilentAudio() {
   return {
@@ -51,8 +50,12 @@ function createRunner(shiftIndex, seed) {
   const shift = SHIFTS[shiftIndex];
   const rng = createRng(seed);
   const kitchen = createKitchen();
-  const chef = createChef();
-  const orders = createOrderSystem(shift, rng);
+  const brigade = createBrigade();
+  const upgrades = createUpgradeState();
+  const mods = getUpgradeModifiers(upgrades);
+  const orders = createOrderSystem(shift, rng, mods);
+  const diningRoom = createDiningRoom();
+  const textures = createProceduralTextures(TILE_SIZE);
   const fxState = createParticleSystem();
   const fx = bindParticleHelpers(fxState);
   const audio = createSilentAudio();
@@ -62,21 +65,32 @@ function createRunner(shiftIndex, seed) {
     shiftElapsed: 0,
     shiftDuration: shift.durationSec,
     kitchen,
-    chef,
+    brigade,
+    upgrades,
+    mods,
     orders,
+    diningRoom,
+    textures,
     fxState,
     fx,
     audio,
+    keepAppliancesSafe() {
+      // Prevent unrelated appliances from burning while demonstrating a long multi-dish sequence
+      for (const st of kitchen.stations) {
+        if (st.cook && st.cook.elapsed > st.cook.readyTime + 0.8) {
+          st.cook.elapsed = st.cook.readyTime + 0.45;
+          st.cook.state = 'sweet';
+        }
+      }
+    },
     tick() {
       sim.time += FIXED_STEP;
       sim.shiftElapsed += FIXED_STEP;
       updateKitchenStations(kitchen, FIXED_STEP, fx, audio);
+      sim.keepAppliancesSafe();
       updateOrders(orders, FIXED_STEP, sim.shiftElapsed, sim.shiftDuration);
+      updateDiningGuests(diningRoom, FIXED_STEP);
       updateParticles(fxState, FIXED_STEP);
-    },
-    step(seconds) {
-      const steps = Math.max(1, Math.round(seconds / FIXED_STEP));
-      for (let i = 0; i < steps; i++) sim.tick();
     },
     waitUntilReady(col, row) {
       const st = getStationAt(kitchen, col, row);
@@ -86,14 +100,14 @@ function createRunner(shiftIndex, seed) {
         guard += 1;
       }
     },
-    walkAndAct(col, row) {
+    walkAndAct(chefIndex, col, row) {
+      const chef = brigade.chefs[chefIndex];
       const st = getStationAt(kitchen, col, row);
       if (!st) return false;
       commandChefToStation(chef, kitchen, st);
       let guard = 0;
       while (guard < 500) {
         guard += 1;
-        // Pro chef uses dash on longer sprints across the kitchen
         if (chef.autoPath.length >= 2 && chef.dashCooldown <= 0) {
           const wp = chef.autoPath[0];
           triggerChefDash(chef, wp.x - chef.x, wp.y - chef.y, fx, audio);
@@ -102,65 +116,88 @@ function createRunner(shiftIndex, seed) {
         sim.shiftElapsed += FIXED_STEP;
         const arrived = updateChefMovement(chef, kitchen, { x: 0, y: 0 }, FIXED_STEP, true);
         updateKitchenStations(kitchen, FIXED_STEP, fx, audio);
+        sim.keepAppliancesSafe();
         updateOrders(orders, FIXED_STEP, sim.shiftElapsed, sim.shiftDuration);
+        updateDiningGuests(diningRoom, FIXED_STEP);
         updateParticles(fxState, FIXED_STEP);
         if (arrived) {
-          return interactWithStation(arrived, chef, kitchen, orders, fx, audio);
+          return interactWithStation(arrived, chef, kitchen, orders, fx, audio, {
+            mods,
+            diningRoom,
+          });
         }
         if (chef.autoPath.length === 0 && !chef.pendingStation) break;
       }
-      return interactWithStation(st, chef, kitchen, orders, fx, audio);
+      return interactWithStation(st, chef, kitchen, orders, fx, audio, {
+        mods,
+        diningRoom,
+      });
     },
-    chopAt(col, row, targetProgress = 1.0) {
+    chopAt(chefIndex, col, row, targetProgress = 1.0) {
+      const chef = brigade.chefs[chefIndex];
       const st = getStationAt(kitchen, col, row);
       if (!st) return;
-      const start = st.chopProgress;
-      const needed = Math.max(0.05, targetProgress - start);
-      const ticks = Math.round((needed * 0.85) / FIXED_STEP);
-      for (let i = 0; i < ticks; i++) {
+      if (targetProgress >= 1.0) {
+        let guard = 0;
+        while (st.item?.kind === 'ingredient' && INGREDIENTS[st.item.id]?.choppable && guard < 120) {
+          guard += 1;
+          sim.time += FIXED_STEP;
+          sim.shiftElapsed += FIXED_STEP;
+          advanceChopping(st, chef, FIXED_STEP, fx, audio, 0);
+          updateKitchenStations(kitchen, FIXED_STEP, fx, audio);
+          sim.keepAppliancesSafe();
+          updateOrders(orders, FIXED_STEP, sim.shiftElapsed, sim.shiftDuration);
+          updateDiningGuests(diningRoom, FIXED_STEP);
+          updateParticles(fxState, FIXED_STEP);
+        }
+        return;
+      }
+      let guard = 0;
+      while (st.chopProgress < targetProgress && st.item?.kind === 'ingredient' && INGREDIENTS[st.item.id]?.choppable && guard < 120) {
+        guard += 1;
         sim.time += FIXED_STEP;
         sim.shiftElapsed += FIXED_STEP;
         advanceChopping(st, chef, FIXED_STEP, fx, audio, 0);
         updateKitchenStations(kitchen, FIXED_STEP, fx, audio);
+        sim.keepAppliancesSafe();
         updateOrders(orders, FIXED_STEP, sim.shiftElapsed, sim.shiftDuration);
+        updateDiningGuests(diningRoom, FIXED_STEP);
         updateParticles(fxState, FIXED_STEP);
-        if (st.chopProgress === 0 && targetProgress >= 1) break;
       }
     },
   };
   return sim;
 }
 
-function populateOrderRail(orders, mode) {
+function setOrderRail(orders, mode) {
   orders.tickets = [];
   const presets =
-    mode === 'fever'
+    mode === 'gala'
       ? [
-          { id: 'seared_ribeye', vip: false, ratio: 0.22 },
-          { id: 'chefs_tasting', vip: true, ratio: 0.54 },
-          { id: 'pomodoro_pasta', vip: false, ratio: 0.68 },
-          { id: 'margherita', vip: false, ratio: 0.82 },
-          { id: 'funghi_flatbread', vip: false, ratio: 0.91 },
+          { id: 'surf_and_turf', vip: true, ratio: 0.24 },
+          { id: 'seared_ribeye', vip: false, ratio: 0.48 },
+          { id: 'chefs_tasting', vip: true, ratio: 0.68 },
+          { id: 'citrus_salmon', vip: false, ratio: 0.81 },
+          { id: 'funghi_flatbread', vip: false, ratio: 0.92 },
         ]
-      : mode === 'sear'
+      : mode === 'morning'
         ? [
-            { id: 'pomodoro_pasta', vip: false, ratio: 0.36 },
-            { id: 'seared_ribeye', vip: false, ratio: 0.58 },
-            { id: 'margherita', vip: false, ratio: 0.76 },
-            { id: 'bruschetta', vip: false, ratio: 0.85 },
-            { id: 'porcini_pasta', vip: false, ratio: 0.93 },
+            { id: 'pomodoro_pasta', vip: false, ratio: 0.34 },
+            { id: 'salmon_pasta', vip: false, ratio: 0.56 },
+            { id: 'saffron_pasta', vip: false, ratio: 0.74 },
+            { id: 'margherita', vip: false, ratio: 0.89 },
           ]
         : [
-            { id: 'seared_ribeye', vip: false, ratio: 0.32 },
-            { id: 'pomodoro_pasta', vip: false, ratio: 0.61 },
-            { id: 'margherita', vip: false, ratio: 0.77 },
-            { id: 'porcini_pasta', vip: false, ratio: 0.86 },
+            { id: 'seared_ribeye', vip: false, ratio: 0.31 },
+            { id: 'pomodoro_pasta', vip: false, ratio: 0.58 },
+            { id: 'citrus_salmon', vip: false, ratio: 0.74 },
+            { id: 'margherita', vip: false, ratio: 0.85 },
             { id: 'chefs_tasting', vip: true, ratio: 0.94 },
           ];
-  for (const preset of presets) {
-    const t = spawnOrderTicket(orders, preset.id, preset.vip);
+  for (const p of presets) {
+    const t = spawnOrderTicket(orders, p.id, p.vip);
     if (t) {
-      t.patience = Math.round(t.patienceMax * preset.ratio);
+      t.patience = Math.round(t.patienceMax * p.ratio);
       t.slideIn = 0;
     }
   }
@@ -168,138 +205,121 @@ function populateOrderRail(orders, mode) {
 
 export function stageDeterministicShot(shotName, seed = 7) {
   const mode = shotName || 'rush';
-  const shiftIndex = mode === 'fever' ? 2 : 1;
+  const shiftIndex = mode === 'morning' ? 0 : mode === 'gala' ? 2 : 1;
   const sim = createRunner(shiftIndex, seed);
-  const { kitchen, chef, orders, fx, fxState, audio } = sim;
+  const { kitchen, brigade, upgrades, orders, diningRoom, textures, fx, fxState, audio } = sim;
 
   orders.spawnCooldown = 999;
-  spawnOrderTicket(orders, 'bruschetta', false);
+  spawnOrderTicket(orders, 'citrus_salmon', false);
   spawnOrderTicket(orders, 'seared_ribeye', false);
   spawnOrderTicket(orders, 'pomodoro_pasta', false);
   spawnOrderTicket(orders, 'margherita', false);
-  spawnOrderTicket(orders, 'chefs_tasting', true);
+  spawnOrderTicket(orders, 'surf_and_turf', true);
 
-  // STAGE A: Prepare a gleaming Seared Ribeye & Herb ★ and stage it on Warm Pass (11, 2) READY TO SERVE!
-  sim.walkAndAct(2, 0); // grab wild porcini
-  sim.walkAndAct(3, 2); // chop porcini
-  sim.chopAt(3, 2, 1.0);
-  sim.walkAndAct(1, 0); // grab basil
-  sim.walkAndAct(4, 2); // chop basil
-  sim.chopAt(4, 2, 1.0);
-  sim.walkAndAct(3, 0); // grab raw ribeye
-  sim.walkAndAct(8, 0); // sear ribeye in Skillet 1
-  sim.walkAndAct(3, 2); // pick up sliced porcini
-  sim.walkAndAct(9, 0); // saute porcini in Skillet 2
-  sim.walkAndAct(8, 2); // grab warm plate
-  sim.walkAndAct(4, 2); // scoop fresh basil onto plate
+  // 1. Cook & stage complete Seared Ribeye & Herb ★ on Warm Pass (11, 2) READY TO SERVE!
+  sim.walkAndAct(1, 2, 0); // Sofia grabs porcini
+  sim.walkAndAct(1, 3, 2); // places on Chop 1
+  sim.chopAt(1, 3, 2, 1.0); // sliced porcini
+  sim.walkAndAct(1, 3, 2); // picks up sliced porcini
+  sim.walkAndAct(1, 9, 0); // sautes porcini in Skillet 2!
+
+  sim.walkAndAct(0, 3, 0); // Marco grabs ribeye
+  sim.walkAndAct(0, 8, 0); // sears ribeye in Skillet 1!
+
+  sim.walkAndAct(1, 1, 0); // Sofia grabs basil
+  sim.walkAndAct(1, 4, 2); // chops on Chop 2
+  sim.chopAt(1, 4, 2, 1.0);
+
+  sim.walkAndAct(1, 8, 2); // grabs warm plate
+  sim.walkAndAct(1, 4, 2); // scoops fresh basil onto plate
   sim.waitUntilReady(9, 0);
-  sim.walkAndAct(9, 0); // pull golden porcini ★ onto plate
+  sim.walkAndAct(1, 9, 0); // scoops golden porcini ★ onto plate
   sim.waitUntilReady(8, 0);
-  sim.walkAndAct(8, 0); // pull seared ribeye ★ onto plate -> Seared Ribeye & Herb ★ READY!
-  sim.walkAndAct(11, 2); // set finished plate on Warm Service Pass!
+  sim.walkAndAct(1, 8, 0); // scoops seared ribeye ★ -> Seared Ribeye & Herb ★ READY!
+  sim.walkAndAct(1, 11, 2); // stages finished plate on Warm Service Pass!
 
-  // STAGE B: Assemble a 2/3 MID-ASSEMBLY Pomodoro Tagliatelle on Central Assembly Bench 1 (5, 2)
-  sim.walkAndAct(0, 0); // grab tomato
-  sim.walkAndAct(3, 2); // chop tomato
-  sim.chopAt(3, 2, 1.0);
-  sim.walkAndAct(3, 2); // pick up diced tomato
-  sim.walkAndAct(7, 0); // simmer Pomodoro Ragu in Copper Pot 2
-  sim.walkAndAct(4, 0); // grab pasta
-  sim.walkAndAct(6, 0); // boil fresh pasta in Copper Pot 1
-  sim.walkAndAct(8, 2); // grab warm plate
+  // 2. Stage 2/3 MID-ASSEMBLY Pomodoro Tagliatelle on Central Assembly Bench 1 (5, 2)
+  sim.walkAndAct(1, 0, 0); // tomato
+  sim.walkAndAct(1, 3, 2); // chop tomato
+  sim.chopAt(1, 3, 2, 1.0);
+  sim.walkAndAct(1, 3, 2); // pick up diced tomato
+  sim.walkAndAct(1, 7, 0); // simmer Pomodoro in Pot 2
+
+  sim.walkAndAct(0, 4, 0); // Marco grabs fresh pasta
+  sim.walkAndAct(0, 6, 0); // boils Pasta in Pot 1
+
+  sim.walkAndAct(1, 8, 2); // warm plate
   sim.waitUntilReady(7, 0);
-  sim.walkAndAct(7, 0); // ladle crimson pomodoro ragu onto plate
+  sim.walkAndAct(1, 7, 0); // scoops crimson Pomodoro ★
   sim.waitUntilReady(6, 0);
-  sim.walkAndAct(6, 0); // scoop golden al-dente pasta onto plate -> 2/3 MID-ASSEMBLY!
-  sim.walkAndAct(5, 2); // stage mid-assembly plate on Assembly Bench 1!
+  sim.walkAndAct(1, 6, 0); // scoops golden Pasta ★ -> 2/3 · +BASIL mid-assembly!
+  sim.walkAndAct(1, 5, 2); // places mid-assembly plate on Assembly Bench 1!
 
-  // STAGE C: Prep fresh counter ingredients & a Raw Hearth Margherita ready for the Stone Oven on (6, 2)
-  sim.walkAndAct(0, 0);
-  sim.walkAndAct(3, 2);
-  sim.chopAt(3, 2, 1.0);
-  sim.walkAndAct(3, 2);
-  sim.walkAndAct(7, 0);
-  sim.walkAndAct(1, 0);
-  sim.walkAndAct(4, 2);
-  sim.chopAt(4, 2, 1.0);
-  sim.walkAndAct(5, 0);
-  sim.walkAndAct(6, 2);
+  // 3. Stage Raw Hearth Margherita (BAKE IN OVEN) on Central Assembly Bench 2 (6, 2)
+  sim.walkAndAct(1, 0, 0);
+  sim.walkAndAct(1, 3, 2);
+  sim.chopAt(1, 3, 2, 1.0);
+  sim.walkAndAct(1, 3, 2);
+  sim.walkAndAct(1, 7, 0); // Pomodoro in Pot 2
+
+  sim.walkAndAct(1, 1, 0);
+  sim.walkAndAct(1, 4, 2);
+  sim.chopAt(1, 4, 2, 1.0); // minced basil on Chop 2
+
+  sim.walkAndAct(0, 5, 0); // dough
+  sim.walkAndAct(0, 6, 2); // place on Assembly Bench 2
   sim.waitUntilReady(7, 0);
-  sim.walkAndAct(7, 0);
-  sim.walkAndAct(6, 2);
-  sim.walkAndAct(4, 2);
-  sim.walkAndAct(6, 2); // Raw Hearth Margherita (BAKE IN OVEN) on (6, 2)!
+  sim.walkAndAct(0, 7, 0); // scoop pomodoro
+  sim.walkAndAct(0, 6, 2); // spread pomodoro onto dough!
+  sim.walkAndAct(1, 4, 2); // pick up minced basil
+  sim.walkAndAct(1, 6, 2); // top with basil -> Raw Hearth Margherita (BAKE IN OVEN)!
 
-  // Extra visible prepped counter ingredients: diced tomato on (7, 2) and sliced porcini on Chop Board 3 (4, 4)
-  sim.walkAndAct(0, 0);
-  sim.walkAndAct(3, 2);
-  sim.chopAt(3, 2, 1.0);
-  sim.walkAndAct(3, 2);
-  sim.walkAndAct(7, 2); // Diced Tomatoes staged on Garnish Bench!
-
-  sim.walkAndAct(2, 0);
-  sim.walkAndAct(4, 4);
-  sim.chopAt(4, 4, 1.0); // Sliced Porcini on Front Chop Board 3!
-
-  // STAGE D: Serve a fresh Caprese Bruschetta right near the end so Dining Pass (11, 4) gleams!
-  if (!orders.tickets.some((t) => t.recipeId === 'bruschetta')) {
+  // 4. Cook & SERVE an Amalfi Citrus Salmon ★ -> lights up Dining Pass (11, 4) & Elena's candlelit table!
+  if (!orders.tickets.some((t) => t.recipeId === 'citrus_salmon')) {
     orders.tickets.pop();
-    spawnOrderTicket(orders, 'bruschetta', false);
+    spawnOrderTicket(orders, 'citrus_salmon', false);
   }
-  sim.walkAndAct(0, 0);
-  sim.walkAndAct(3, 2);
-  sim.chopAt(3, 2, 1.0);
-  sim.walkAndAct(1, 0);
-  sim.walkAndAct(4, 2);
-  sim.chopAt(4, 2, 1.0);
-  sim.walkAndAct(5, 0);
-  sim.walkAndAct(10, 0); // toast crostini
-  sim.walkAndAct(8, 2); // grab warm plate
-  sim.walkAndAct(3, 2); // scoop diced tomato
-  sim.walkAndAct(4, 2); // scoop fresh basil
-  sim.waitUntilReady(10, 0);
-  sim.walkAndAct(10, 0); // pull crostini -> Caprese Bruschetta ★ complete!
-  sim.walkAndAct(11, 3); // serve at Brass Service Bell -> live on TO DINING (11, 4)!
+  sim.walkAndAct(0, 0, 2); // Marco grabs Wild Salmon
+  sim.walkAndAct(0, 9, 0); // sears Salmon in Skillet 2
+  sim.walkAndAct(0, 0, 3); // grabs Saffron & Lemon
+  sim.walkAndAct(0, 7, 0); // infuses Saffron Glaze in Pot 2
+  sim.walkAndAct(1, 1, 0);
+  sim.walkAndAct(1, 4, 2);
+  sim.chopAt(1, 4, 2, 1.0);
+  sim.walkAndAct(1, 8, 2); // warm plate
+  sim.walkAndAct(1, 4, 2); // basil
+  sim.waitUntilReady(7, 0);
+  sim.walkAndAct(1, 7, 0); // saffron glaze ★
+  sim.waitUntilReady(9, 0);
+  sim.walkAndAct(1, 9, 0); // seared salmon ★ -> Amalfi Citrus Salmon ★ COMPLETE!
+  sim.walkAndAct(1, 11, 3); // RING BRASS SERVICE BELL -> Elena gets dish + tip!
 
-  // STAGE E: Ignite the ENTIRE Hot Line in parallel right before the freeze-frame (ZERO burnt pans!)
-  sim.walkAndAct(3, 0);
-  sim.walkAndAct(8, 0); // Skillet 1 searing Ribeye!
+  // 5. Stage fresh counter prep: Diced Tomato on Garnish Bench (7, 2) + Sliced Porcini on Front Chop 3 (4, 4)
+  sim.walkAndAct(1, 0, 0);
+  sim.walkAndAct(1, 3, 2);
+  sim.chopAt(1, 3, 2, 1.0);
+  sim.walkAndAct(1, 3, 2);
+  sim.walkAndAct(1, 7, 2); // Diced Tomatoes on Garnish Bench
 
-  sim.walkAndAct(0, 0);
-  sim.walkAndAct(3, 2);
-  sim.chopAt(3, 2, 1.0);
-  sim.walkAndAct(3, 2);
-  sim.walkAndAct(7, 0); // Copper Pot 2 simmering Pomodoro!
+  sim.walkAndAct(1, 2, 0);
+  sim.walkAndAct(1, 4, 4);
+  sim.chopAt(1, 4, 4, 1.0); // Sliced Porcini on Front Chop Board 3
 
-  sim.walkAndAct(4, 0);
-  sim.walkAndAct(6, 0); // Copper Pot 1 boiling Pasta!
-
-  if (mode === 'sear') {
-    // In Shot 2, bake our Raw Margherita right inside the glowing Stone Oven!
-    sim.walkAndAct(6, 2);
-    sim.walkAndAct(10, 0);
-    sim.walkAndAct(4, 4);
-    sim.walkAndAct(9, 0); // Skillet 2 sauteing Porcini!
-    // Re-chop porcini on board 3 so front bench stays lively
-    sim.walkAndAct(2, 0);
-    sim.walkAndAct(4, 4);
-    sim.chopAt(4, 4, 1.0);
+  // 6. Ignite ALL 5 Hot-Line Stations cleanly (Pot 1 Pasta, Pot 2 Saffron, Skillet 1 Ribeye, Skillet 2 Salmon, 420°C Brick Oven!)
+  sim.walkAndAct(0, 4, 0);
+  sim.walkAndAct(0, 6, 0); // Pot 1: Boiling Pasta
+  sim.walkAndAct(0, 0, 3);
+  sim.walkAndAct(0, 7, 0); // Pot 2: Golden Saffron Glaze
+  sim.walkAndAct(0, 3, 0);
+  sim.walkAndAct(0, 8, 0); // Skillet 1: Searing Ribeye
+  sim.walkAndAct(0, 0, 2);
+  sim.walkAndAct(0, 9, 0); // Skillet 2: Searing Wild Salmon
+  if (mode === 'morning' || mode === 'gala') {
+    sim.walkAndAct(0, 6, 2); // Slide Raw Margherita straight into 420°C Brick Oven!
+    sim.walkAndAct(0, 10, 0);
   } else {
-    sim.walkAndAct(5, 0);
-    sim.walkAndAct(10, 0); // Stone Oven 1 baking golden Hearth Crostini!
-    sim.walkAndAct(4, 4);
-    sim.walkAndAct(9, 0); // Skillet 2 sauteing Porcini!
-    sim.walkAndAct(2, 0);
-    sim.walkAndAct(4, 4);
-    sim.chopAt(4, 4, 1.0);
-  }
-
-  // Wait until Skillet 1 hits Golden Sweet-Spot ★, keeping every burner in crisp active range
-  const skillet1 = getStationAt(kitchen, 8, 0);
-  let waitGuard = 0;
-  while (skillet1?.cook && skillet1.cook.state === 'cooking' && waitGuard < 220) {
-    sim.tick();
-    waitGuard += 1;
+    sim.walkAndAct(0, 5, 0);
+    sim.walkAndAct(0, 10, 0); // Bake Hearth Crostini in 420°C Brick Oven!
   }
 
   const normalizeHotLine = () => {
@@ -315,13 +335,13 @@ export function stageDeterministicShot(shotName, seed = 7) {
     }
     const sk1 = getStationAt(kitchen, 8, 0);
     if (sk1?.cook) {
-      sk1.cook.elapsed = sk1.cook.readyTime + 0.55;
+      sk1.cook.elapsed = sk1.cook.readyTime + 0.5;
       sk1.cook.state = 'sweet';
     }
     const sk2 = getStationAt(kitchen, 9, 0);
     if (sk2?.cook) {
-      sk2.cook.elapsed = sk2.cook.readyTime * 0.68;
-      sk2.cook.state = 'cooking';
+      sk2.cook.elapsed = sk2.cook.readyTime + 0.35;
+      sk2.cook.state = 'sweet';
     }
     const ov1 = getStationAt(kitchen, 10, 0);
     if (ov1?.cook) {
@@ -330,125 +350,231 @@ export function stageDeterministicShot(shotName, seed = 7) {
     }
   };
 
-  populateOrderRail(orders, mode);
+  setOrderRail(orders, mode);
   fxState.popups = [];
   fxState.particles = [];
 
   let screen = SCREEN_MODES.PLAYING;
   let hoveredStation = null;
 
+  const marco = brigade.chefs[0];
+  const sofia = brigade.chefs[1];
+
   if (mode === 'rush') {
-    // COVER SHOT: Chef actively chopping Sweet Basil right on Chop Board 2 (4, 2) beside 2/3 mid-assembly pasta!
-    sim.walkAndAct(1, 0);
-    sim.walkAndAct(4, 2);
-    sim.chopAt(4, 2, 0.62);
+    // SHOT 1 COVER (Golden Hour Sunset Rush):
+    // Sofia actively chopping Sweet Basil on Chop Board 2 (4, 2) beside 2/3 mid-assembly Pomodoro Pasta + BAKE IN OVEN Margherita!
+    // Marco pulls gleaming ★ Seared Ribeye from Skillet 1 with golden dotted route heading to Assembly Bench 1!
+    sim.walkAndAct(1, 1, 0);
+    sim.walkAndAct(1, 4, 2);
+    sim.chopAt(1, 4, 2, 0.64);
+
+    // Marco grabs sizzling Seared Ribeye ★ and reloads Skillet 1? Even cleaner: Marco holds a fresh Seared Salmon ★ from Skillet 2, then reload Skillet 2? Keep Skillet 1 searing Ribeye & Skillet 2 searing Salmon while Marco carries a freshly pulled ★ Seared Ribeye toward plating!
     normalizeHotLine();
+    sim.walkAndAct(0, 8, 0); // Marco pulls ★ Seared Ribeye!
+    // Reload Skillet 1 with another fresh Ribeye so ALL 5 hot-line appliances gleam with °C gauges!
+    const sk1 = getStationAt(kitchen, 8, 0);
+    sk1.cook = {
+      inputId: 'steak',
+      outputId: 'seared_steak',
+      elapsed: 4.15,
+      readyTime: 3.7,
+      sweetEnd: 6.0,
+      warnTime: 6.9,
+      burnTime: 9.3,
+      targetTempC: 242,
+      state: 'sweet',
+    };
+    normalizeHotLine();
+
+    const mPos = tileCenter(8, 1);
+    marco.x = mPos.x;
+    marco.y = mPos.y + 4;
+    marco.facingX = -1;
+    marco.facingY = 0;
+    commandChefToStation(marco, kitchen, getStationAt(kitchen, 5, 2));
+    brigade.activeIndex = 0;
+
     fxState.popups = [];
     fxState.particles = [];
-    orders.combo = 3;
-    orders.maxCombo = 3;
-    orders.dishesServed = 5;
-    orders.perfectServed = 3;
-    orders.score = 214;
-    orders.tipsEarned = 58;
-    orders.rushActive = true;
-    orders.rushBannerTimer = 0;
-    sim.shiftElapsed = 69; // 01:36 remaining on brass clock!
-    const sc = getStationAt(kitchen, 11, 4);
-    if (sc?.showcase) sc.showcase.timer = 9.0;
-    // Crisp live kitchen atmosphere particles (pure white steam, golden sear sparks, green basil bits, hearth embers!)
-    const sk1Pos = tileCenter(8, 0);
-    for (let i = 0; i < 6; i++) fx.spawnSizzleSpark(sk1Pos.x + (i - 2.5) * 6, sk1Pos.y - 10, true);
-    const pot1Pos = tileCenter(6, 0);
-    const pot2Pos = tileCenter(7, 0);
-    fx.spawnSteam(pot1Pos.x - 4, pot1Pos.y - 18, false);
-    fx.spawnSteam(pot1Pos.x + 6, pot1Pos.y - 26, false);
-    fx.spawnSteam(pot2Pos.x - 3, pot2Pos.y - 18, false);
-    fx.spawnSteam(pot2Pos.x + 5, pot2Pos.y - 24, false);
-    const ovPos = tileCenter(10, 0);
-    for (let i = 0; i < 4; i++) fx.spawnEmber(ovPos.x + (i - 1.5) * 10, ovPos.y + 4);
-    const chopPos = tileCenter(4, 2);
-    fx.spawnChopBits(chopPos.x, chopPos.y - 6, '#4db350', 9);
-  } else if (mode === 'sear') {
-    // SHOT 2: Chef finishes Pomodoro Tagliatelle ★ and carries it right up to the glowing Brass Service Bell!
-    sim.walkAndAct(1, 0);
-    sim.walkAndAct(4, 2);
-    sim.chopAt(4, 2, 1.0);
-    sim.walkAndAct(4, 2);
-    sim.walkAndAct(5, 2);
-    sim.walkAndAct(5, 2); // pick up finished Pomodoro Tagliatelle ★!
-    normalizeHotLine();
-    fxState.popups = [];
-    fxState.particles = [];
-    const bellApproach = tileCenter(10, 3);
-    chef.x = bellApproach.x + 6;
-    chef.y = bellApproach.y;
-    chef.facingX = 1;
-    chef.facingY = 0;
-    chef.facingAngle = 0;
-    orders.combo = 2;
-    orders.maxCombo = 2;
-    orders.dishesServed = 4;
-    orders.perfectServed = 2;
-    orders.score = 168;
-    orders.rushActive = true;
-    orders.rushBannerTimer = 0;
-    sim.shiftElapsed = 52;
-    const sc = getStationAt(kitchen, 11, 4);
-    if (sc?.showcase) sc.showcase.timer = 9.0;
-    const sk1Pos = tileCenter(8, 0);
-    fx.spawnGoldBurst(sk1Pos.x, sk1Pos.y - 14, 10);
-    const pot1Pos = tileCenter(6, 0);
-    fx.spawnSteam(pot1Pos.x, pot1Pos.y - 20, false);
-    const pot2Pos = tileCenter(7, 0);
-    fx.spawnSteam(pot2Pos.x, pot2Pos.y - 20, false);
-  } else if (mode === 'fever') {
-    // SHOT 3: Peak FEVER SERVICE rush in final 18s with VIP Critic Tasting Plate + golden bursts!
-    normalizeHotLine();
-    sim.walkAndAct(8, 0); // Chef pulls gleaming ★ Seared Ribeye straight from Skillet 1!
-    normalizeHotLine();
-    fxState.popups = [];
-    fxState.particles = [];
-    const mid = tileCenter(5, 3);
-    chef.x = mid.x;
-    chef.y = mid.y - 6;
-    chef.facingX = 0;
-    chef.facingY = -1;
-    chef.facingAngle = -Math.PI / 2;
     orders.combo = 4;
     orders.maxCombo = 4;
-    orders.feverTimer = 14;
+    orders.feverTimer = 0;
+    orders.dishesServed = 6;
+    orders.perfectServed = 4;
+    orders.score = 286;
+    orders.tipsEarned = 78;
     orders.rushActive = true;
     orders.rushBannerTimer = 0;
-    orders.dishesServed = 8;
-    orders.perfectServed = 5;
-    orders.score = 392;
-    orders.tipsEarned = 114;
-    sim.shiftElapsed = sim.shiftDuration - 18;
-    const bellPos = tileCenter(11, 3);
-    fx.spawnGoldBurst(bellPos.x - 16, bellPos.y - 12, 22);
-    fx.spawnPopup(bellPos.x - 122, bellPos.y - 6, '+$64 PERFECT! ★', '#ffe066', 17);
-    const pot1Pos = tileCenter(6, 0);
-    fx.spawnSteam(pot1Pos.x, pot1Pos.y - 20, false);
-    const pot2Pos = tileCenter(7, 0);
-    fx.spawnSteam(pot2Pos.x, pot2Pos.y - 20, false);
+    sim.shiftElapsed = 71; // 01:34 remaining!
     const sc = getStationAt(kitchen, 11, 4);
-    if (sc?.showcase) sc.showcase.timer = 9.0;
-  } else if (mode === 'title') {
+    if (sc) {
+      sc.showcase = { dishId: 'citrus_salmon', perfect: true, payout: 69, tip: 21, combo: 4, timer: 10.5 };
+    }
+    diningRoom.tables[0].servedDishId = 'citrus_salmon';
+    diningRoom.tables[0].servedPerfect = true;
+    diningRoom.tables[0].delightTimer = 4.5;
+    diningRoom.tables[0].serveTimer = 11;
+    diningRoom.tables[0].lastTipText = '★ +$69';
+
+    const sk1Pos = tileCenter(8, 0);
+    for (let i = 0; i < 6; i++) fx.spawnSizzleSpark(sk1Pos.x + (i - 2.5) * 6, sk1Pos.y - 8, true);
+    for (const c of [6, 7]) {
+      const p = tileCenter(c, 0);
+      fx.spawnSteam(p.x - 4, p.y - 16, false);
+      fx.spawnSteam(p.x + 5, p.y - 25, false);
+    }
+    const ovPos = tileCenter(10, 0);
+    for (let i = 0; i < 5; i++) fx.spawnEmber(ovPos.x + (i - 2) * 8, ovPos.y + 4);
+    const chopPos = tileCenter(4, 2);
+    fx.spawnChopBits(chopPos.x, chopPos.y - 6, '#4db350', 9);
+  } else if (mode === 'gala') {
+    // SHOT 2 (Shift 3: Candlelit Twilight Gala + Peak FEVER ×6 + 00:18 Countdown!)
+    // Marco builds & carries a complete VIP Grand Surf & Turf ★ toward the Brass Service Bell!
+    normalizeHotLine();
+    sim.walkAndAct(1, 1, 0);
+    sim.walkAndAct(1, 4, 2);
+    sim.chopAt(1, 4, 2, 1.0); // minced basil ready on Chop 2
+
+    sim.walkAndAct(0, 8, 2); // Marco grabs warm plate
+    sim.walkAndAct(0, 8, 0); // scoops ★ Seared Ribeye
+    sim.walkAndAct(0, 9, 0); // scoops ★ Seared Salmon
+    sim.walkAndAct(0, 7, 0); // scoops ★ Saffron Glaze
+    sim.walkAndAct(0, 4, 2); // scoops fresh Basil -> VIP GRAND SURF & TURF ★ COMPLETE!
+
+    // Sofia reloads Skillet 1, Skillet 2 & Pot 2 so the whole twilight hot line glows dramatically!
+    sim.walkAndAct(1, 3, 0);
+    sim.walkAndAct(1, 8, 0);
+    sim.walkAndAct(1, 0, 2);
+    sim.walkAndAct(1, 9, 0);
+    sim.walkAndAct(1, 0, 3);
+    sim.walkAndAct(1, 7, 0);
+    normalizeHotLine();
+
+    const mPos = tileCenter(9, 3);
+    marco.x = mPos.x + 6;
+    marco.y = mPos.y;
+    marco.facingX = 1;
+    marco.facingY = 0;
+    commandChefToStation(marco, kitchen, getStationAt(kitchen, 11, 3));
+
+    const sPos = tileCenter(5, 3);
+    sofia.x = sPos.x;
+    sofia.y = sPos.y - 4;
+    sofia.facingX = 0;
+    sofia.facingY = -1;
+    brigade.activeIndex = 0;
+
+    fxState.popups = [];
+    fxState.particles = [];
+    orders.combo = 6;
+    orders.maxCombo = 6;
+    orders.feverTimer = 15;
+    orders.rushActive = true;
+    orders.rushBannerTimer = 0;
+    orders.dishesServed = 11;
+    orders.perfectServed = 8;
+    orders.score = 548;
+    orders.tipsEarned = 164;
+    sim.shiftElapsed = sim.shiftDuration - 18;
+    diningRoom.tables[1].servedDishId = 'chefs_tasting';
+    diningRoom.tables[1].servedPerfect = true;
+    diningRoom.tables[1].serveTimer = 12;
+    diningRoom.tables[1].delightTimer = 5;
+    diningRoom.tables[1].lastTipText = '★ +$96';
+    const sc = getStationAt(kitchen, 11, 4);
+    if (sc) {
+      sc.showcase = { dishId: 'chefs_tasting', perfect: true, payout: 96, tip: 32, combo: 6, timer: 10.5 };
+    }
+    const bellPos = tileCenter(11, 3);
+    fx.spawnGoldBurst(bellPos.x - 10, bellPos.y - 10, 22);
+    // Positioned cleanly in open corridor above Marco's route (zero overlap with Marco's hat or Warm Pass!)
+    fx.spawnPopup(bellPos.x - 165, bellPos.y - 68, '+$96 CRITIC PERFECT! ★', '#ffe066', 16);
+    const ovPos = tileCenter(10, 0);
+    for (let i = 0; i < 6; i++) fx.spawnEmber(ovPos.x + (i - 2.5) * 8, ovPos.y + 4);
+  } else if (mode === 'morning') {
+    // SHOT 3 (Shift 1: Sunlit Amalfi Morning — Dual-Chef Simultaneous Queued Route Planning!)
+    // Sofia finishes Pomodoro Tagliatelle ★ and queues cyan route straight to Brass Bell!
+    // Marco pulls Golden Saffron Glaze ★ and queues golden route straight to a 2/3 Salmon Pasta mid-assembly plate!
+    normalizeHotLine();
+    sim.walkAndAct(1, 1, 0);
+    sim.walkAndAct(1, 4, 2);
+    sim.chopAt(1, 4, 2, 1.0);
+    sim.walkAndAct(1, 4, 2); // pick up minced basil
+    sim.walkAndAct(1, 5, 2); // complete Pomodoro Tagliatelle ★ on Assembly Bench 1!
+    sim.walkAndAct(1, 5, 2); // pick up finished Pomodoro Tagliatelle ★!
+
+    // Marco puts a 2/3 Salmon Pasta (Seared Salmon + Boiled Pasta) mid-assembly plate on Assembly Bench 2 (6, 2),
+    // then carries Golden Saffron Glaze ★ along a visible golden route right to it!
+    sim.walkAndAct(0, 8, 2); // plate
+    sim.walkAndAct(0, 6, 0); // boiled pasta ★
+    sim.walkAndAct(0, 9, 0); // seared salmon ★ -> 2/3 · +GLAZE!
+    sim.walkAndAct(0, 6, 2); // place on Assembly Bench 2!
+    sim.walkAndAct(0, 7, 0); // Marco carries Saffron Citrus Glaze ★!
+
+    // Keep all 5 hot-line appliances cooking brightly in morning sun
+    const pot1 = getStationAt(kitchen, 6, 0);
+    pot1.cook = { inputId: 'pasta', outputId: 'boiled_pasta', elapsed: 2.5, readyTime: 3.3, sweetEnd: 6.4, warnTime: 8.5, burnTime: 11.4, targetTempC: 100, state: 'cooking' };
+    const pot2 = getStationAt(kitchen, 7, 0);
+    pot2.cook = { inputId: 'saffron', outputId: 'saffron_glaze', elapsed: 3.4, readyTime: 3.0, sweetEnd: 6.0, warnTime: 8.2, burnTime: 11.2, targetTempC: 165, state: 'sweet' };
+    const sk2 = getStationAt(kitchen, 9, 0);
+    sk2.cook = { inputId: 'salmon', outputId: 'seared_salmon', elapsed: 3.6, readyTime: 3.2, sweetEnd: 5.6, warnTime: 6.6, burnTime: 9.0, targetTempC: 224, state: 'sweet' };
+    normalizeHotLine();
+
+    const mPos = tileCenter(2, 1);
+    marco.x = mPos.x;
+    marco.y = mPos.y;
+    marco.facingX = 1;
+    marco.facingY = 0;
+    commandChefToStation(marco, kitchen, getStationAt(kitchen, 6, 2));
+
+    const sPos = tileCenter(7, 3);
+    sofia.x = sPos.x;
+    sofia.y = sPos.y;
+    sofia.facingX = 1;
+    sofia.facingY = 0;
+    commandChefToStation(sofia, kitchen, getStationAt(kitchen, 11, 3));
+    brigade.activeIndex = 1;
+
+    fxState.popups = [];
+    fxState.particles = [];
+    orders.combo = 2;
+    orders.maxCombo = 2;
+    orders.dishesServed = 3;
+    orders.perfectServed = 2;
+    orders.score = 148;
+    orders.rushActive = false;
+    orders.rushBannerTimer = 0;
+    sim.shiftElapsed = 44;
+    const sc = getStationAt(kitchen, 11, 4);
+    if (sc) {
+      sc.showcase = { dishId: 'citrus_salmon', perfect: true, payout: 62, tip: 14, combo: 2, timer: 10.5 };
+    }
+    diningRoom.tables[0].servedDishId = 'citrus_salmon';
+    diningRoom.tables[0].servedPerfect = true;
+    diningRoom.tables[0].serveTimer = 11;
+    diningRoom.tables[0].delightTimer = 0;
+    for (const c of [6, 7]) {
+      const p = tileCenter(c, 0);
+      fx.spawnSteam(p.x, p.y - 18, false);
+    }
+  } else if (mode === 'upgrades') {
+    // SHOT 4: Brigade Workshop + 12-Dish Artisan Bistro Menu!
     normalizeHotLine();
     fxState.popups = [];
     fxState.particles = [];
-    screen = SCREEN_MODES.TITLE;
-    sim.shiftElapsed = 0;
-    orders.score = 0;
-    orders.combo = 0;
-    orders.dishesServed = 0;
+    upgrades.bank = 440;
+    purchaseKitchenUpgrade(upgrades, 'damascus_knife');
+    purchaseKitchenUpgrade(upgrades, 'hammered_copper');
+    orders.score = 286;
+    orders.combo = 4;
+    orders.dishesServed = 6;
+    sim.shiftElapsed = 71;
+    screen = SCREEN_MODES.UPGRADES;
   }
 
-  // Final particle tick for natural airborne steam/sparks
   updateParticles(fxState, FIXED_STEP * 3);
-
-  const targetStation = selectTargetStation(chef, kitchen, hoveredStation);
+  const activeChef = brigade.chefs[brigade.activeIndex];
+  const targetStation = selectTargetStation(activeChef, kitchen, hoveredStation);
 
   return {
     screen,
@@ -457,8 +583,12 @@ export function stageDeterministicShot(shotName, seed = 7) {
     shiftElapsed: sim.shiftElapsed,
     shiftDuration: sim.shiftDuration,
     kitchen,
-    chef,
+    brigade,
+    upgrades,
+    mods: sim.mods,
     orders,
+    diningRoom,
+    textures,
     fx: fxState,
     fxHelpers: fx,
     audio,
@@ -466,6 +596,7 @@ export function stageDeterministicShot(shotName, seed = 7) {
     targetStation,
     ticketBounds: [],
     hudButtons: [],
+    brigadeButtons: [],
     titleButtons: [],
     overlayButtons: [],
   };

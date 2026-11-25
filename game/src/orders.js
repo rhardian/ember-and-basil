@@ -1,12 +1,13 @@
-// Order ticket rail, service wave pacing, VIP critic orders, patience timers, and combo scoring.
+// Order ticket rail, wave pacing, VIP critic orders, patience timers, upgrade modifiers, and combo scoring.
 
 import { TIMING } from './config.js';
 import { RECIPES } from './recipes.js';
 
-export function createOrderSystem(shift, rng) {
+export function createOrderSystem(shift, rng, upgradeMods = null) {
   return {
     shift,
     rng,
+    upgradeMods: upgradeMods ?? { patienceMult: 1, tipBonusMult: 1 },
     tickets: [],
     nextTicketId: 1,
     spawnCooldown: 0.4,
@@ -38,7 +39,7 @@ export function spawnOrderTicket(orderSys, forcedRecipeId = null, forcedVip = nu
   if (!recipeId) {
     const activeIds = new Set(orderSys.tickets.map((t) => t.recipeId));
     const freshChoices = shift.menu.filter((id) => !activeIds.has(id));
-    const pool = freshChoices.length > 0 && rng() < 0.72 ? freshChoices : shift.menu;
+    const pool = freshChoices.length > 0 && rng() < 0.74 ? freshChoices : shift.menu;
     recipeId = pool[Math.floor(rng() * pool.length)];
   }
 
@@ -47,10 +48,12 @@ export function spawnOrderTicket(orderSys, forcedRecipeId = null, forcedVip = nu
     forcedVip !== null
       ? forcedVip
       : recipeId === 'chefs_tasting' ||
+        recipeId === 'surf_and_turf' ||
         (orderSys.tickets.length >= 2 && rng() < shift.vipChance);
 
+  const patienceMult = orderSys.upgradeMods?.patienceMult ?? 1;
   const patienceMax = Math.round(
-    recipe.patienceSec * shift.patienceScale * (isVip ? 0.92 : 1.0),
+    recipe.patienceSec * shift.patienceScale * patienceMult * (isVip ? 0.94 : 1.0),
   );
 
   const ticket = {
@@ -70,7 +73,7 @@ export function updateOrders(orderSys, dt, shiftElapsed, shiftDuration, callback
   const remaining = Math.max(0, shiftDuration - shiftElapsed);
   if (!orderSys.rushActive && shiftElapsed >= orderSys.shift.rushStartSec) {
     orderSys.rushActive = true;
-    orderSys.rushBannerTimer = 3.2;
+    orderSys.rushBannerTimer = 3.0;
     callbacks.onRushStart?.();
   }
 
@@ -85,15 +88,12 @@ export function updateOrders(orderSys, dt, shiftElapsed, shiftDuration, callback
     if (orderSys.focusTimer === 0) orderSys.focusedTicketId = null;
   }
 
-  // Update ticket timers
   const kept = [];
   for (const ticket of orderSys.tickets) {
     ticket.slideIn = Math.max(0, ticket.slideIn - dt * 4.5);
     ticket.patience -= dt;
     const ratio = ticket.patience / ticket.patienceMax;
-    if (ratio < 0.28) {
-      ticket.pulse += dt * 7;
-    }
+    if (ratio < 0.28) ticket.pulse += dt * 7;
     if (ticket.patience <= 0) {
       orderSys.expiredCount += 1;
       orderSys.combo = 0;
@@ -105,7 +105,6 @@ export function updateOrders(orderSys, dt, shiftElapsed, shiftDuration, callback
   }
   orderSys.tickets = kept;
 
-  // Keep the rail bustling without overwhelming the player
   orderSys.spawnCooldown -= dt;
   const minWanted = orderSys.rushActive ? 3 : 2;
   if (
@@ -137,9 +136,7 @@ export function serveDishAgainstOrders(orderSys, dishId, isPerfect) {
     }
   }
 
-  if (bestIdx === -1) {
-    return { matched: false };
-  }
+  if (bestIdx === -1) return { matched: false };
 
   const [ticket] = orderSys.tickets.splice(bestIdx, 1);
   const recipe = RECIPES[dishId];
@@ -160,10 +157,14 @@ export function serveDishAgainstOrders(orderSys, dishId, isPerfect) {
   const speedTip = Math.round(basePay * 0.25 * speedRatio);
   const perfectBonus = isPerfect ? Math.round(basePay * TIMING.perfectBonusRatio) : 0;
   const vipBonus = ticket.isVip ? Math.round(basePay * 0.35) : 0;
-  const comboBonus = Math.min(4, orderSys.combo - 1) * 5;
+  const comboBonus = Math.min(5, orderSys.combo - 1) * 5;
   const feverMultiplier = orderSys.feverTimer > 0 ? 1.25 : 1.0;
+  const tipUpgradeMult =
+    isPerfect || ticket.isVip ? (orderSys.upgradeMods?.tipBonusMult ?? 1) : 1;
 
-  const totalTip = Math.round((speedTip + perfectBonus + vipBonus + comboBonus) * feverMultiplier);
+  const totalTip = Math.round(
+    (speedTip + perfectBonus + vipBonus + comboBonus) * feverMultiplier * tipUpgradeMult,
+  );
   const totalPayout = basePay + totalTip;
 
   orderSys.score += totalPayout;

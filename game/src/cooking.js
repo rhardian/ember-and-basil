@@ -1,6 +1,7 @@
-// Real-time cooking simulation: chopping, simmering, sweet-spot searing, oven baking, and smart plating.
+// Real-time cooking simulation: live °C thermal curves, sweet-spot searing, stone hearth baking, and smart plating.
 
 import { CHEF_CONFIG, TIMING, tileCenter } from './config.js';
+import { reactToServedDish } from './diners.js';
 import { STATION_TYPES, findStationByType } from './kitchen.js';
 import { serveDishAgainstOrders } from './orders.js';
 import {
@@ -12,28 +13,43 @@ import {
   createPlate,
   createRawPie,
   findRawPieProgress,
-  resolveCompleteDish,
   resolveRawPieBakeResult,
 } from './recipes.js';
 
-function getCookProfile(stationType, inputId) {
+function getCookProfile(stationType, inputId, mods = null) {
+  const cookMult = mods?.cookSpeedMult ?? 1;
+  const ovenMult = mods?.ovenSpeedMult ?? 1;
+  const sweetBonus = mods?.sweetSpotBonusSec ?? 0;
+
   if (stationType === STATION_TYPES.POT) {
     if (inputId === 'pasta') {
       return {
         outputId: 'boiled_pasta',
-        readyTime: TIMING.potBoilDuration,
-        sweetEnd: TIMING.potSweetEnd,
-        warnTime: TIMING.potWarnTime,
-        burnTime: TIMING.potBurnTime,
+        readyTime: TIMING.potBoilDuration / cookMult,
+        sweetEnd: TIMING.potSweetEnd / cookMult + sweetBonus,
+        warnTime: TIMING.potWarnTime / cookMult + sweetBonus,
+        burnTime: TIMING.potBurnTime / cookMult + sweetBonus,
+        targetTempC: 100,
       };
     }
     if (inputId === 'chopped_tomato') {
       return {
         outputId: 'pomodoro_sauce',
-        readyTime: TIMING.sauceSimmerDuration,
-        sweetEnd: TIMING.sauceSweetEnd,
-        warnTime: TIMING.sauceWarnTime,
-        burnTime: TIMING.sauceBurnTime,
+        readyTime: TIMING.sauceSimmerDuration / cookMult,
+        sweetEnd: TIMING.sauceSweetEnd / cookMult + sweetBonus,
+        warnTime: TIMING.sauceWarnTime / cookMult + sweetBonus,
+        burnTime: TIMING.sauceBurnTime / cookMult + sweetBonus,
+        targetTempC: 175,
+      };
+    }
+    if (inputId === 'saffron') {
+      return {
+        outputId: 'saffron_glaze',
+        readyTime: TIMING.sauceSimmerDuration / cookMult,
+        sweetEnd: TIMING.sauceSweetEnd / cookMult + sweetBonus,
+        warnTime: TIMING.sauceWarnTime / cookMult + sweetBonus,
+        burnTime: TIMING.sauceBurnTime / cookMult + sweetBonus,
+        targetTempC: 165,
       };
     }
   }
@@ -42,19 +58,31 @@ function getCookProfile(stationType, inputId) {
     if (inputId === 'steak') {
       return {
         outputId: 'seared_steak',
-        readyTime: TIMING.skilletSteakDuration,
-        sweetEnd: TIMING.skilletSteakSweetEnd,
-        warnTime: TIMING.skilletSteakWarn,
-        burnTime: TIMING.skilletSteakBurn,
+        readyTime: TIMING.skilletSteakDuration / cookMult,
+        sweetEnd: TIMING.skilletSteakSweetEnd / cookMult + sweetBonus,
+        warnTime: TIMING.skilletSteakWarn / cookMult + sweetBonus,
+        burnTime: TIMING.skilletSteakBurn / cookMult + sweetBonus,
+        targetTempC: 242,
+      };
+    }
+    if (inputId === 'salmon') {
+      return {
+        outputId: 'seared_salmon',
+        readyTime: TIMING.skilletSalmonDuration / cookMult,
+        sweetEnd: TIMING.skilletSalmonSweetEnd / cookMult + sweetBonus,
+        warnTime: TIMING.skilletSalmonWarn / cookMult + sweetBonus,
+        burnTime: TIMING.skilletSalmonBurn / cookMult + sweetBonus,
+        targetTempC: 224,
       };
     }
     if (inputId === 'chopped_mushroom') {
       return {
         outputId: 'sauteed_mushroom',
-        readyTime: TIMING.skilletMushroomDuration,
-        sweetEnd: TIMING.skilletMushroomSweetEnd,
-        warnTime: TIMING.skilletMushroomWarn,
-        burnTime: TIMING.skilletMushroomBurn,
+        readyTime: TIMING.skilletMushroomDuration / cookMult,
+        sweetEnd: TIMING.skilletMushroomSweetEnd / cookMult + sweetBonus,
+        warnTime: TIMING.skilletMushroomWarn / cookMult + sweetBonus,
+        burnTime: TIMING.skilletMushroomBurn / cookMult + sweetBonus,
+        targetTempC: 208,
       };
     }
   }
@@ -63,19 +91,21 @@ function getCookProfile(stationType, inputId) {
     if (inputId === 'dough') {
       return {
         outputId: 'toasted_bread',
-        readyTime: TIMING.ovenToastDuration,
-        sweetEnd: TIMING.ovenToastSweetEnd,
-        warnTime: TIMING.ovenToastWarn,
-        burnTime: TIMING.ovenToastBurn,
+        readyTime: TIMING.ovenToastDuration / ovenMult,
+        sweetEnd: TIMING.ovenToastSweetEnd / ovenMult + sweetBonus,
+        warnTime: TIMING.ovenToastWarn / ovenMult + sweetBonus,
+        burnTime: TIMING.ovenToastBurn / ovenMult + sweetBonus,
+        targetTempC: 395,
       };
     }
     if (inputId === 'baked_margherita' || inputId === 'baked_funghi') {
       return {
         outputId: inputId,
-        readyTime: TIMING.ovenBakeDuration,
-        sweetEnd: TIMING.ovenBakeSweetEnd,
-        warnTime: TIMING.ovenBakeWarn,
-        burnTime: TIMING.ovenBakeBurn,
+        readyTime: TIMING.ovenBakeDuration / ovenMult,
+        sweetEnd: TIMING.ovenBakeSweetEnd / ovenMult + sweetBonus,
+        warnTime: TIMING.ovenBakeWarn / ovenMult + sweetBonus,
+        burnTime: TIMING.ovenBakeBurn / ovenMult + sweetBonus,
+        targetTempC: 420,
       };
     }
   }
@@ -83,8 +113,19 @@ function getCookProfile(stationType, inputId) {
   return null;
 }
 
-export function startCookingOnStation(station, inputId, bakedOverrideId = null) {
-  const profile = getCookProfile(station.type, bakedOverrideId ?? inputId);
+export function getLiveTemperatureC(cook) {
+  if (!cook) return 22;
+  const target = cook.targetTempC ?? 210;
+  const ramp = Math.min(1, cook.elapsed / Math.max(0.5, cook.readyTime));
+  const base = Math.round(78 + (target - 78) * ramp);
+  if (cook.state === 'warn' || cook.state === 'burnt') {
+    return base + Math.round((cook.elapsed - cook.readyTime) * 14);
+  }
+  return base;
+}
+
+export function startCookingOnStation(station, inputId, bakedOverrideId = null, mods = null) {
+  const profile = getCookProfile(station.type, bakedOverrideId ?? inputId, mods);
   if (!profile) return false;
   station.cook = {
     inputId,
@@ -94,7 +135,8 @@ export function startCookingOnStation(station, inputId, bakedOverrideId = null) 
     sweetEnd: profile.sweetEnd,
     warnTime: profile.warnTime,
     burnTime: profile.burnTime,
-    state: 'cooking', // cooking | sweet | ready | warn | burnt
+    targetTempC: profile.targetTempC,
+    state: 'cooking',
   };
   station.bounce = 1.0;
   return true;
@@ -111,10 +153,7 @@ export function extractCookedItem(station) {
   station.cook = null;
   station.bounce = 1.0;
 
-  if (
-    !isBurnt &&
-    (outputId === 'baked_margherita' || outputId === 'baked_funghi')
-  ) {
+  if (!isBurnt && (outputId === 'baked_margherita' || outputId === 'baked_funghi')) {
     return createPlate([outputId], isPerfect);
   }
   return createIngredientItem(outputId, isPerfect);
@@ -137,59 +176,47 @@ export function updateKitchenStations(kitchen, dt, fx, audio) {
     const prevState = cook.state;
     cook.elapsed += dt;
 
-    if (cook.elapsed >= cook.burnTime) {
-      cook.state = 'burnt';
-    } else if (cook.elapsed >= cook.warnTime) {
-      cook.state = 'warn';
-    } else if (cook.elapsed >= cook.sweetEnd) {
-      cook.state = 'ready';
-    } else if (cook.elapsed >= cook.readyTime) {
-      cook.state = 'sweet';
-    } else {
-      cook.state = 'cooking';
-    }
+    if (cook.elapsed >= cook.burnTime) cook.state = 'burnt';
+    else if (cook.elapsed >= cook.warnTime) cook.state = 'warn';
+    else if (cook.elapsed >= cook.sweetEnd) cook.state = 'ready';
+    else if (cook.elapsed >= cook.readyTime) cook.state = 'sweet';
+    else cook.state = 'cooking';
 
     const pos = tileCenter(st.col, st.row);
     if (prevState === 'cooking' && cook.state === 'sweet') {
       audio?.playReadyDing(st.type);
       fx?.spawnGoldBurst(pos.x, pos.y - 18, 10);
-      fx?.spawnPopup(pos.x, pos.y - 34, 'PERFECT ZONE ★', '#ffd452', 13);
+      fx?.spawnPopup(pos.x, pos.y - 34, `${cook.targetTempC}°C PERFECT ★`, '#ffd452', 12.5);
     } else if (prevState !== 'warn' && cook.state === 'warn') {
       audio?.playWarnBeep();
     } else if (prevState !== 'burnt' && cook.state === 'burnt') {
       audio?.playBurnSizzle();
-      fx?.spawnPopup(pos.x, pos.y - 34, 'OVERCOOKED!', '#ff594a', 14);
+      fx?.spawnPopup(pos.x, pos.y - 34, 'OVERCOOKED!', '#ff594a', 13.5);
     }
 
-    // Continuous ambient cooking particles
     if (fx) {
       if (st.type === STATION_TYPES.POT) {
-        if (Math.random() < dt * 7) fx.spawnSteam(pos.x + (Math.random() - 0.5) * 26, pos.y - 16, cook.state === 'warn' || cook.state === 'burnt');
+        if (Math.random() < dt * 7) fx.spawnSteam(pos.x + (Math.random() - 0.5) * 24, pos.y - 16, cook.state === 'warn' || cook.state === 'burnt');
       } else if (st.type === STATION_TYPES.SKILLET) {
-        if (Math.random() < dt * 9) {
-          fx.spawnSizzleSpark(pos.x + (Math.random() - 0.5) * 32, pos.y - 8, cook.state === 'sweet');
-        }
+        if (Math.random() < dt * 9) fx.spawnSizzleSpark(pos.x + (Math.random() - 0.5) * 30, pos.y - 8, cook.state === 'sweet');
         if (cook.state === 'warn' || cook.state === 'burnt') {
-          if (Math.random() < dt * 10) fx.spawnSteam(pos.x + (Math.random() - 0.5) * 20, pos.y - 14, true);
+          if (Math.random() < dt * 9) fx.spawnSteam(pos.x + (Math.random() - 0.5) * 20, pos.y - 14, true);
         }
       } else if (st.type === STATION_TYPES.OVEN) {
-        if (Math.random() < dt * 6) fx.spawnEmber(pos.x + (Math.random() - 0.5) * 30, pos.y + 8);
-        if (cook.state === 'warn' || cook.state === 'burnt') {
-          if (Math.random() < dt * 8) fx.spawnSteam(pos.x, pos.y - 10, true);
-        }
+        if (Math.random() < dt * 6) fx.spawnEmber(pos.x + (Math.random() - 0.5) * 28, pos.y + 8);
       }
     }
   }
 }
 
-export function advanceChopping(station, chef, dt, fx, audio, boost = 0) {
+export function advanceChopping(station, chef, dt, fx, audio, boost = 0, chopSpeedMult = 1) {
   if (!station || station.type !== STATION_TYPES.CHOP) return false;
   if (!station.item || station.item.kind !== 'ingredient') return false;
   const info = INGREDIENTS[station.item.id];
   if (!info?.choppable) return false;
 
   const prevStep = Math.floor(station.chopProgress * 4);
-  const speed = 1 / CHEF_CONFIG.chopDuration;
+  const speed = chopSpeedMult / CHEF_CONFIG.chopDuration;
   station.chopProgress = Math.min(1, station.chopProgress + dt * speed + boost);
   chef.choppingAnim = 0.16;
 
@@ -206,7 +233,7 @@ export function advanceChopping(station, chef, dt, fx, audio, boost = 0) {
     station.chopProgress = 0;
     station.bounce = 1.0;
     fx?.spawnChopBits(pos.x, pos.y - 8, info.color, 10);
-    fx?.spawnPopup(pos.x, pos.y - 32, INGREDIENTS[info.chopResult].short, '#fbf4e3', 13);
+    fx?.spawnPopup(pos.x, pos.y - 30, INGREDIENTS[info.chopResult].short, '#fbf4e3', 12.5);
     return true;
   }
   return true;
@@ -215,7 +242,6 @@ export function advanceChopping(station, chef, dt, fx, audio, boost = 0) {
 function tryCombineItems(targetItem, addedItem) {
   if (!targetItem || !addedItem) return null;
 
-  // Ingredient added onto Plate
   if (targetItem.kind === 'plate' && addedItem.kind === 'ingredient') {
     if (canAddToPlate(targetItem, addedItem.id)) {
       return createPlate(
@@ -225,7 +251,6 @@ function tryCombineItems(targetItem, addedItem) {
     }
   }
 
-  // Plate scooping up Ingredient
   if (targetItem.kind === 'ingredient' && addedItem.kind === 'plate') {
     if (canAddToPlate(addedItem, targetItem.id)) {
       return createPlate(
@@ -235,7 +260,6 @@ function tryCombineItems(targetItem, addedItem) {
     }
   }
 
-  // Merging two partial plates
   if (targetItem.kind === 'plate' && addedItem.kind === 'plate') {
     const merged = [...new Set([...targetItem.parts, ...addedItem.parts])];
     if (merged.length > targetItem.parts.length && merged.length > addedItem.parts.length) {
@@ -248,7 +272,6 @@ function tryCombineItems(targetItem, addedItem) {
     }
   }
 
-  // Assembling Raw Hearth Flatbread (dough + pomodoro + basil/mushroom)
   if (targetItem.kind === 'ingredient' && addedItem.kind === 'ingredient') {
     if (targetItem.id === 'dough' && INGREDIENTS[addedItem.id]?.doughCombinable) {
       if (canCombineRawPie(['dough'], addedItem.id)) {
@@ -283,7 +306,7 @@ function tryCombineItems(targetItem, addedItem) {
   return null;
 }
 
-function executeServe(plate, passStation, kitchen, orderSys, fx, audio) {
+function executeServe(plate, passStation, kitchen, orderSys, fx, audio, diningRoom = null) {
   if (!plate || plate.kind !== 'plate' || !plate.dishId) {
     return { served: false, reason: 'not_complete' };
   }
@@ -292,26 +315,26 @@ function executeServe(plate, passStation, kitchen, orderSys, fx, audio) {
 
   if (!result.matched) {
     audio?.playErrorBuzz();
-    fx?.spawnPopup(pos.x - 16, pos.y - 34, 'No matching ticket!', '#ff7666', 14);
+    fx?.spawnPopup(pos.x - 16, pos.y - 34, 'No matching ticket!', '#ff7666', 13.5);
     return { served: false, reason: 'no_ticket' };
   }
 
   passStation.bellPulse = 1.0;
   audio?.playServeBell(result.isPerfect || result.isVip);
-  fx?.spawnGoldBurst(pos.x, pos.y - 16, result.isPerfect ? 26 : 16);
-  fx?.addShake(result.isPerfect ? 6 : 3.5);
+  fx?.spawnGoldBurst(pos.x, pos.y - 14, result.isPerfect ? 26 : 16);
+  fx?.addShake(result.isPerfect ? 5.5 : 3.2);
 
   const label = result.isPerfect
     ? `+$${result.totalPayout} PERFECT! ★`
     : `+$${result.totalPayout} (+$${result.tip} tip)`;
-  fx?.spawnPopup(pos.x - 36, pos.y - 42, label, '#ffe066', 17);
+  fx?.spawnPopup(pos.x - 76, pos.y - 26, label, '#ffe066', 16.5);
 
   if (result.combo >= 2) {
-    fx?.spawnPopup(pos.x - 32, pos.y - 68, `×${result.combo} COMBO!`, '#7dffb2', 15);
+    fx?.spawnPopup(pos.x - 72, pos.y - 52, `×${result.combo} COMBO!`, '#7dffb2', 14.5);
   }
   if (result.triggeredFever) {
     audio?.playFeverFanfare();
-    fx?.spawnPopup(640, 290, '🔥 FEVER SERVICE! +25% TIPS & SPEED 🔥', '#ffd447', 22);
+    fx?.spawnPopup(580, 285, '🔥 FEVER SERVICE! +25% TIPS & SPEED 🔥', '#ffd447', 20);
   }
 
   const showcaseStation = findStationByType(kitchen, STATION_TYPES.SHOWCASE);
@@ -327,15 +350,26 @@ function executeServe(plate, passStation, kitchen, orderSys, fx, audio) {
     showcaseStation.bounce = 1.0;
   }
 
+  reactToServedDish(diningRoom, plate.dishId, plate.perfect, result.totalPayout, result.isVip);
+
   return { served: true, result };
 }
 
-export function interactWithStation(station, chef, kitchen, orderSys, fx, audio) {
+export function interactWithStation(
+  station,
+  chef,
+  kitchen,
+  orderSys,
+  fx,
+  audio,
+  options = {},
+) {
   if (!station) return false;
   const pos = tileCenter(station.col, station.row);
   const held = chef.heldItem;
+  const mods = options.mods ?? null;
+  const diningRoom = options.diningRoom ?? null;
 
-  // 1. Pantry Crates
   if (station.type === STATION_TYPES.PANTRY) {
     if (!held) {
       chef.heldItem = createIngredientItem(station.ingredient, false);
@@ -352,7 +386,6 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
     return false;
   }
 
-  // 2. Warm Porcelain Plate Stacks
   if (station.type === STATION_TYPES.PLATE_STACK) {
     if (!held) {
       chef.heldItem = createPlate([], false);
@@ -370,42 +403,38 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
       chef.heldItem = createPlate([held.id], held.perfect);
       station.bounce = 1.0;
       audio?.playPlateClink();
-      fx?.spawnPopup(pos.x, pos.y - 30, 'Plated!', '#fbf4e3', 13);
       return true;
     }
     return false;
   }
 
-  // 3. Brass Compost Bin
   if (station.type === STATION_TYPES.COMPOST) {
     if (!held) return false;
     if (held.kind === 'plate' && held.parts.length > 0) {
       chef.heldItem = createPlate([], false);
-      fx?.spawnPopup(pos.x, pos.y - 30, 'Plate Rinsed', '#e8dec8', 13);
+      fx?.spawnPopup(pos.x, pos.y - 28, 'Plate Rinsed', '#e8dec8', 12.5);
     } else {
       chef.heldItem = null;
-      fx?.spawnPopup(pos.x, pos.y - 30, 'Composted', '#d9cbb3', 13);
+      fx?.spawnPopup(pos.x, pos.y - 28, 'Composted', '#d9cbb3', 12.5);
     }
     station.bounce = 0.9;
     audio?.playTrash();
     return true;
   }
 
-  // 4. Brass Service Pass Bell
   if (station.type === STATION_TYPES.SERVE_BELL) {
     if (held && held.kind === 'plate' && held.dishId) {
-      const outcome = executeServe(held, station, kitchen, orderSys, fx, audio);
+      const outcome = executeServe(held, station, kitchen, orderSys, fx, audio, diningRoom);
       if (outcome.served) {
         chef.heldItem = null;
         return true;
       }
       return false;
     }
-    // Convenience: tap bell with empty hands to serve a completed plate waiting on Warm Pass!
     if (!held) {
       const warmPass = findStationByType(kitchen, STATION_TYPES.PASS_HOLD);
       if (warmPass?.item?.kind === 'plate' && warmPass.item.dishId) {
-        const outcome = executeServe(warmPass.item, station, kitchen, orderSys, fx, audio);
+        const outcome = executeServe(warmPass.item, station, kitchen, orderSys, fx, audio, diningRoom);
         if (outcome.served) {
           warmPass.item = null;
           return true;
@@ -413,11 +442,10 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
       }
     }
     audio?.playErrorBuzz();
-    fx?.spawnPopup(pos.x - 24, pos.y - 34, 'Plate a finished dish!', '#f5c78a', 13);
+    fx?.spawnPopup(pos.x - 24, pos.y - 32, 'Plate a finished dish!', '#f5c78a', 12.5);
     return false;
   }
 
-  // 5. Chopping Boards
   if (station.type === STATION_TYPES.CHOP) {
     if (!station.item && held) {
       station.item = held;
@@ -426,13 +454,13 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
       station.bounce = 0.85;
       audio?.playPlace();
       if (station.item.kind === 'ingredient' && INGREDIENTS[station.item.id]?.choppable) {
-        advanceChopping(station, chef, 0, fx, audio, CHEF_CONFIG.tapChopBoost);
+        advanceChopping(station, chef, 0, fx, audio, CHEF_CONFIG.tapChopBoost, mods?.chopSpeedMult ?? 1);
       }
       return true;
     }
     if (station.item && !held) {
       if (station.item.kind === 'ingredient' && INGREDIENTS[station.item.id]?.choppable) {
-        return advanceChopping(station, chef, 0, fx, audio, CHEF_CONFIG.tapChopBoost);
+        return advanceChopping(station, chef, 0, fx, audio, CHEF_CONFIG.tapChopBoost, mods?.chopSpeedMult ?? 1);
       }
       chef.heldItem = station.item;
       station.item = null;
@@ -458,23 +486,21 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
     return false;
   }
 
-  // 6. Copper Stockpots, Cast-Iron Skillets, and Brick Stone Oven
   if (
     station.type === STATION_TYPES.POT ||
     station.type === STATION_TYPES.SKILLET ||
     station.type === STATION_TYPES.OVEN
   ) {
-    // Load raw/prepped item into empty cooker
     if (!station.cook && held) {
       if (station.type === STATION_TYPES.POT && held.kind === 'ingredient' && INGREDIENTS[held.id]?.potCookable) {
-        startCookingOnStation(station, held.id);
+        startCookingOnStation(station, held.id, null, mods);
         chef.heldItem = null;
         audio?.playCookStart('pot');
         fx?.spawnSteam(pos.x, pos.y - 16, false);
         return true;
       }
       if (station.type === STATION_TYPES.SKILLET && held.kind === 'ingredient' && INGREDIENTS[held.id]?.skilletCookable) {
-        startCookingOnStation(station, held.id);
+        startCookingOnStation(station, held.id, null, mods);
         chef.heldItem = null;
         audio?.playCookStart('skillet');
         fx?.spawnSizzleSpark(pos.x, pos.y - 8, true);
@@ -482,7 +508,7 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
       }
       if (station.type === STATION_TYPES.OVEN) {
         if (held.kind === 'ingredient' && held.id === 'dough') {
-          startCookingOnStation(station, 'dough');
+          startCookingOnStation(station, 'dough', null, mods);
           chef.heldItem = null;
           audio?.playCookStart('oven');
           fx?.spawnEmber(pos.x, pos.y + 6);
@@ -491,13 +517,13 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
         if (held.kind === 'raw_pie') {
           const bakeResult = resolveRawPieBakeResult(held.parts);
           if (bakeResult) {
-            startCookingOnStation(station, 'raw_pie', bakeResult);
+            startCookingOnStation(station, 'raw_pie', bakeResult, mods);
             chef.heldItem = null;
             audio?.playCookStart('oven');
             fx?.spawnEmber(pos.x, pos.y + 6);
             return true;
           }
-          fx?.spawnPopup(pos.x, pos.y - 34, 'Add topping first!', '#ffba73', 13);
+          fx?.spawnPopup(pos.x, pos.y - 32, 'Add topping first!', '#ffba73', 12.5);
           audio?.playErrorBuzz();
           return false;
         }
@@ -505,15 +531,14 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
       return false;
     }
 
-    // Pull cooked item out
     if (station.cook && station.cook.state !== 'cooking') {
       const previewId = station.cook.state === 'burnt' ? 'burnt' : station.cook.outputId;
       if (!held) {
         const extracted = extractCookedItem(station);
         chef.heldItem = extracted;
         if (extracted?.perfect) {
-          fx?.spawnGoldBurst(pos.x, pos.y - 20, 14);
-          fx?.spawnPopup(pos.x, pos.y - 38, 'CHEF PERFECT ★', '#ffd954', 14);
+          fx?.spawnGoldBurst(pos.x, pos.y - 18, 14);
+          fx?.spawnPopup(pos.x, pos.y - 36, 'CHEF PERFECT ★', '#ffd954', 13.5);
         }
         audio?.playPickup();
         return true;
@@ -529,8 +554,7 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
           );
           audio?.playPlateClink();
           if (extracted.perfect) {
-            fx?.spawnGoldBurst(pos.x, pos.y - 20, 14);
-            fx?.spawnPopup(pos.x, pos.y - 38, 'PERFECT PLATED ★', '#ffd954', 14);
+            fx?.spawnGoldBurst(pos.x, pos.y - 18, 14);
           }
           return true;
         }
@@ -539,7 +563,6 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
     return false;
   }
 
-  // 7. Counters, Assembly Benches & Warm Pass Shelf
   if (station.type === STATION_TYPES.COUNTER || station.type === STATION_TYPES.PASS_HOLD) {
     if (!station.item && held) {
       station.item = held;
@@ -569,13 +592,10 @@ export function interactWithStation(station, chef, kitchen, orderSys, fx, audio)
         audio?.playPlateClink();
         if (combined.kind === 'plate' && combined.dishId) {
           fx?.spawnGoldBurst(pos.x, pos.y - 18, 12);
-          fx?.spawnPopup(pos.x, pos.y - 36, `${RECIPES[combined.dishId].shortName} READY!`, '#80f5a8', 14);
-        } else if (combined.kind === 'raw_pie' && findRawPieProgress(combined)?.readyForOven) {
-          fx?.spawnPopup(pos.x, pos.y - 34, 'Ready for Stone Oven!', '#ffd478', 13);
+          fx?.spawnPopup(pos.x, pos.y - 34, `${RECIPES[combined.dishId].shortName} READY!`, '#80f5a8', 13.5);
         }
         return true;
       }
-      // Swap if incompatible
       const prev = station.item;
       station.item = held;
       chef.heldItem = prev;
@@ -606,9 +626,7 @@ export function getSuggestedStationTypes(heldItem) {
       hints.add(STATION_TYPES.PLATE_STACK);
       hints.add(STATION_TYPES.COUNTER);
     }
-    if (info?.doughBase || info?.doughCombinable) {
-      hints.add(STATION_TYPES.COUNTER);
-    }
+    if (info?.doughBase || info?.doughCombinable) hints.add(STATION_TYPES.COUNTER);
     return hints;
   }
 
@@ -652,7 +670,7 @@ export function getActionPromptForStation(station, heldItem) {
   }
   if (station.type === STATION_TYPES.CHOP) {
     if (station.item?.kind === 'ingredient' && INGREDIENTS[station.item.id]?.choppable) {
-      return `Hold Space / Click to Chop ${INGREDIENTS[station.item.id].short}`;
+      return `Chop ${INGREDIENTS[station.item.id].short}`;
     }
     if (heldItem?.kind === 'ingredient' && INGREDIENTS[heldItem.id]?.choppable) {
       return `Chop ${INGREDIENTS[heldItem.id].short}`;
@@ -661,14 +679,15 @@ export function getActionPromptForStation(station, heldItem) {
   }
   if (station.type === STATION_TYPES.POT || station.type === STATION_TYPES.SKILLET || station.type === STATION_TYPES.OVEN) {
     if (station.cook) {
-      if (station.cook.state === 'cooking') return `Cooking ${INGREDIENTS[station.cook.outputId]?.short ?? ''}...`;
-      if (station.cook.state === 'sweet') return `Pull NOW! Perfect ${INGREDIENTS[station.cook.outputId]?.short} ★`;
+      const temp = getLiveTemperatureC(station.cook);
+      if (station.cook.state === 'cooking') return `${temp}°C · Cooking ${INGREDIENTS[station.cook.outputId]?.short ?? ''}`;
+      if (station.cook.state === 'sweet') return `${temp}°C · Pull Perfect ${INGREDIENTS[station.cook.outputId]?.short} ★`;
       if (station.cook.state === 'burnt') return 'Remove Burnt Ruin';
       return `Take ${INGREDIENTS[station.cook.outputId]?.short}`;
     }
-    if (station.type === STATION_TYPES.POT) return 'Boil Pasta / Simmer Tomato';
-    if (station.type === STATION_TYPES.SKILLET) return 'Sear Ribeye / Saute Porcini';
-    return 'Bake Flatbread / Toast Dough';
+    if (station.type === STATION_TYPES.POT) return 'Boil Pasta / Simmer Tomato or Saffron';
+    if (station.type === STATION_TYPES.SKILLET) return 'Sear Ribeye, Salmon or Porcini';
+    return '420°C Stone Oven · Bake Flatbread';
   }
   if (station.type === STATION_TYPES.COMPOST) return 'Compost / Rinse Plate';
   if (station.type === STATION_TYPES.PASS_HOLD) return 'Warm Service Pass';

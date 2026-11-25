@@ -1,4 +1,4 @@
-// Chef movement, smooth counter-sliding collision, BFS mouse click-to-move, dash, and target selection.
+// Dual-Chef Brigade (Head Chef Marco & Sous-Chef Sofia): smooth movement, BFS queued routes, Tab switching, and dash.
 
 import {
   CHEF_CONFIG,
@@ -11,9 +11,18 @@ import {
 } from './config.js';
 import { getWalkableNeighbors, isTileWalkable, worldToTile } from './kitchen.js';
 
-export function createChef() {
-  const start = tileCenter(5, 3);
+export function createChef(profile = {}) {
+  const start = tileCenter(profile.startCol ?? 5, profile.startRow ?? 3);
   return {
+    id: profile.id ?? 'marco',
+    name: profile.name ?? 'Chef Marco',
+    role: profile.role ?? 'Head Chef',
+    apronColor: profile.apronColor ?? '#346949',
+    scarfColor: profile.scarfColor ?? '#d43f2c',
+    hairColor: profile.hairColor ?? '#3a2417',
+    skinColor: profile.skinColor ?? '#f5c79e',
+    tallToque: profile.tallToque ?? true,
+    routeColor: profile.routeColor ?? '#ffe270',
     x: start.x,
     y: start.y,
     vx: 0,
@@ -28,10 +37,53 @@ export function createChef() {
     dashDirX: 0,
     dashDirY: 0,
     choppingAnim: 0,
-    autoPath: [], // array of { x, y }
+    autoPath: [],
     pendingStation: null,
     autoChoppingStation: null,
   };
+}
+
+export function createBrigade() {
+  return {
+    chefs: [
+      createChef({
+        id: 'marco',
+        name: 'Chef Marco',
+        role: 'Hot Line & Hearth',
+        startCol: 6,
+        startRow: 1,
+        apronColor: '#2f6646',
+        scarfColor: '#d43f2c',
+        hairColor: '#3a2417',
+        skinColor: '#f4c59c',
+        tallToque: true,
+        routeColor: '#ffe066',
+      }),
+      createChef({
+        id: 'sofia',
+        name: 'Sous-Chef Sofia',
+        role: 'Prep & Pass',
+        startCol: 4,
+        startRow: 3,
+        apronColor: '#2b596e',
+        scarfColor: '#e89d2c',
+        hairColor: '#4c2618',
+        skinColor: '#e8b389',
+        tallToque: false,
+        routeColor: '#78e8ff',
+      }),
+    ],
+    activeIndex: 0,
+  };
+}
+
+export function getActiveChef(brigade) {
+  return brigade.chefs[brigade.activeIndex];
+}
+
+export function switchActiveChef(brigade) {
+  brigade.activeIndex = (brigade.activeIndex + 1) % brigade.chefs.length;
+  return brigade.chefs[brigade.activeIndex];
 }
 
 function circleIntersectsTile(cx, cy, radius, col, row) {
@@ -66,7 +118,7 @@ function canStandAt(kitchen, x, y, radius) {
   return true;
 }
 
-export function triggerChefDash(chef, dirX, dirY, fx, audio) {
+export function triggerChefDash(chef, dirX, dirY, fx, audio, cooldownMult = 1) {
   if (chef.dashCooldown > 0 || chef.dashTimer > 0) return false;
   let dx = dirX;
   let dy = dirY;
@@ -81,7 +133,7 @@ export function triggerChefDash(chef, dirX, dirY, fx, audio) {
   chef.dashDirX = dx;
   chef.dashDirY = dy;
   chef.dashTimer = CHEF_CONFIG.dashDuration;
-  chef.dashCooldown = CHEF_CONFIG.dashCooldown;
+  chef.dashCooldown = CHEF_CONFIG.dashCooldown * cooldownMult;
   chef.facingX = dx;
   chef.facingY = dy;
   chef.facingAngle = Math.atan2(dy, dx);
@@ -161,7 +213,6 @@ export function commandChefToPoint(chef, kitchen, wx, wy) {
 }
 
 export function selectTargetStation(chef, kitchen, hoveredStation = null) {
-  // If hovering a station within generous reach, prefer it for intuitive hybrid play
   if (hoveredStation) {
     const hc = tileCenter(hoveredStation.col, hoveredStation.row);
     if (Math.hypot(hc.x - chef.x, hc.y - chef.y) <= CHEF_CONFIG.interactRange + 26) {
@@ -179,7 +230,7 @@ export function selectTargetStation(chef, kitchen, hoveredStation = null) {
     if (dist > CHEF_CONFIG.interactRange) continue;
 
     const dot = dist > 0.01 ? (dx * chef.facingX + dy * chef.facingY) / dist : 1;
-    if (dot < -0.18 && dist > 64) continue;
+    if (dot < -0.18 && dist > 62) continue;
 
     const score = dot * 72 - dist * 0.9;
     if (score > bestScore) {
@@ -190,7 +241,7 @@ export function selectTargetStation(chef, kitchen, hoveredStation = null) {
   return best;
 }
 
-export function updateChefMovement(chef, kitchen, inputVec, dt, feverActive) {
+export function updateChefMovement(chef, kitchen, inputVec, dt, feverActive, speedMult = 1) {
   if (chef.dashCooldown > 0) chef.dashCooldown = Math.max(0, chef.dashCooldown - dt);
   if (chef.choppingAnim > 0) chef.choppingAnim = Math.max(0, chef.choppingAnim - dt);
 
@@ -226,7 +277,7 @@ export function updateChefMovement(chef, kitchen, inputVec, dt, feverActive) {
     }
   }
 
-  let speed = CHEF_CONFIG.speed * (feverActive ? CHEF_CONFIG.feverSpeedMultiplier : 1);
+  let speed = CHEF_CONFIG.speed * speedMult * (feverActive ? CHEF_CONFIG.feverSpeedMultiplier : 1);
   if (chef.dashTimer > 0) {
     chef.dashTimer = Math.max(0, chef.dashTimer - dt);
     moveX = chef.dashDirX;
@@ -262,7 +313,6 @@ export function updateChefMovement(chef, kitchen, inputVec, dt, feverActive) {
     chef.vy = 0;
   }
 
-  // Check if auto-path reached pending station
   let arrivedStation = null;
   if (chef.pendingStation && chef.autoPath.length === 0) {
     const sc = tileCenter(chef.pendingStation.col, chef.pendingStation.row);

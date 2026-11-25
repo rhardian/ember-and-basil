@@ -1,4 +1,4 @@
-// Artisan ingredients, prep transformations, combinatorial bistro recipes, and plate matching.
+// 8 fresh ingredients, prep/cook transformations, 12 combinatorial artisan bistro recipes, and smart plate matching.
 
 export const INGREDIENTS = {
   tomato: {
@@ -8,7 +8,7 @@ export const INGREDIENTS = {
     color: '#d93829',
     choppable: true,
     chopResult: 'chopped_tomato',
-    stepHint: 'Chop on cutting board',
+    stepHint: 'Chop on maple cutting board',
   },
   chopped_tomato: {
     id: 'chopped_tomato',
@@ -18,7 +18,7 @@ export const INGREDIENTS = {
     potCookable: true,
     potResult: 'pomodoro_sauce',
     plateable: true,
-    stepHint: 'Simmer in Pot for Sauce, or plate on Bruschetta',
+    stepHint: 'Simmer in Pot for Pomodoro, or plate Bruschetta',
   },
   pomodoro_sauce: {
     id: 'pomodoro_sauce',
@@ -36,7 +36,7 @@ export const INGREDIENTS = {
     color: '#3f9645',
     choppable: true,
     chopResult: 'chopped_basil',
-    stepHint: 'Chop on cutting board',
+    stepHint: 'Chop on maple cutting board',
   },
   chopped_basil: {
     id: 'chopped_basil',
@@ -54,7 +54,7 @@ export const INGREDIENTS = {
     color: '#9c6e4b',
     choppable: true,
     chopResult: 'chopped_mushroom',
-    stepHint: 'Slice on cutting board',
+    stepHint: 'Slice on maple cutting board',
   },
   chopped_mushroom: {
     id: 'chopped_mushroom',
@@ -81,7 +81,7 @@ export const INGREDIENTS = {
     color: '#b83c3b',
     skilletCookable: true,
     skilletResult: 'seared_steak',
-    stepHint: 'Sear on hot Cast-Iron Skillet',
+    stepHint: 'Sear on 240°C Cast-Iron Skillet',
   },
   seared_steak: {
     id: 'seared_steak',
@@ -89,7 +89,41 @@ export const INGREDIENTS = {
     short: 'Seared Steak',
     color: '#6e3222',
     plateable: true,
-    stepHint: 'Plate with Porcini & Basil or Tasting Pasta',
+    stepHint: 'Plate for Ribeye, Tasting Plate or Surf & Turf',
+  },
+  salmon: {
+    id: 'salmon',
+    name: 'Wild Salmon Fillet',
+    short: 'Raw Salmon',
+    color: '#f07c56',
+    skilletCookable: true,
+    skilletResult: 'seared_salmon',
+    stepHint: 'Pan-sear on 225°C Cast-Iron Skillet',
+  },
+  seared_salmon: {
+    id: 'seared_salmon',
+    name: 'Crispy Citrus Salmon',
+    short: 'Seared Salmon',
+    color: '#e8683a',
+    plateable: true,
+    stepHint: 'Plate with Saffron Glaze, Pasta or Surf & Turf',
+  },
+  saffron: {
+    id: 'saffron',
+    name: 'Saffron & Lemon',
+    short: 'Saffron',
+    color: '#f2b824',
+    potCookable: true,
+    potResult: 'saffron_glaze',
+    stepHint: 'Infuse in Copper Pot for Saffron Citrus Glaze',
+  },
+  saffron_glaze: {
+    id: 'saffron_glaze',
+    name: 'Saffron Citrus Glaze',
+    short: 'Saffron Glaze',
+    color: '#f5be32',
+    plateable: true,
+    stepHint: 'Glaze Salmon, Pasta, Crostini or Surf & Turf',
   },
   pasta: {
     id: 'pasta',
@@ -106,7 +140,7 @@ export const INGREDIENTS = {
     short: 'Boiled Pasta',
     color: '#f2cf6c',
     plateable: true,
-    stepHint: 'Plate with Pomodoro or Porcini & Basil',
+    stepHint: 'Combine with Pomodoro, Saffron, Porcini or Salmon',
   },
   dough: {
     id: 'dough',
@@ -116,7 +150,7 @@ export const INGREDIENTS = {
     ovenCookable: true,
     ovenResult: 'toasted_bread',
     doughBase: true,
-    stepHint: 'Toast in Oven for Bruschetta, or top with Pomodoro',
+    stepHint: 'Toast in 420°C Oven, or top with Pomodoro',
   },
   toasted_bread: {
     id: 'toasted_bread',
@@ -124,7 +158,7 @@ export const INGREDIENTS = {
     short: 'Crostini',
     color: '#d2954e',
     plateable: true,
-    stepHint: 'Plate with Diced Tomato & Fresh Basil',
+    stepHint: 'Plate for Bruschetta or Saffron Crostini',
   },
   baked_margherita: {
     id: 'baked_margherita',
@@ -147,7 +181,7 @@ export const INGREDIENTS = {
     name: 'Charred Ruin',
     short: 'Burnt',
     color: '#2a2422',
-    stepHint: 'Toss in the Brass Compost Bin (Q)',
+    stepHint: 'Toss in Compost Bin or press Q',
   },
 };
 
@@ -163,6 +197,17 @@ export const RECIPES = {
     stepsText: 'Toast Dough + Diced Tomato + Basil',
     accent: '#d94d32',
   },
+  saffron_crostini: {
+    id: 'saffron_crostini',
+    name: 'Saffron Lemon Crostini',
+    shortName: 'Saffron Toast',
+    price: 30,
+    patienceSec: 56,
+    components: ['toasted_bread', 'saffron_glaze', 'chopped_basil'],
+    ovenRecipe: false,
+    stepsText: 'Toast Dough + Saffron Glaze + Basil',
+    accent: '#c98e1e',
+  },
   pomodoro_pasta: {
     id: 'pomodoro_pasta',
     name: 'Pomodoro Tagliatelle',
@@ -174,11 +219,22 @@ export const RECIPES = {
     stepsText: 'Boil Pasta + Simmer Pomodoro + Basil',
     accent: '#cc3726',
   },
+  saffron_pasta: {
+    id: 'saffron_pasta',
+    name: 'Amalfi Saffron Pasta',
+    shortName: 'Saffron Pasta',
+    price: 38,
+    patienceSec: 64,
+    components: ['boiled_pasta', 'saffron_glaze', 'chopped_basil'],
+    ovenRecipe: false,
+    stepsText: 'Boil Pasta + Infuse Saffron + Basil',
+    accent: '#d49a1e',
+  },
   porcini_pasta: {
     id: 'porcini_pasta',
     name: 'Truffle Porcini Pasta',
     shortName: 'Porcini Pasta',
-    price: 38,
+    price: 40,
     patienceSec: 66,
     components: ['boiled_pasta', 'sauteed_mushroom', 'chopped_basil'],
     ovenRecipe: false,
@@ -195,27 +251,49 @@ export const RECIPES = {
     rawPieParts: ['dough', 'pomodoro_sauce', 'chopped_basil'],
     displaySteps: ['dough', 'pomodoro_sauce', 'chopped_basil'],
     ovenRecipe: true,
-    stepsText: 'Dough + Pomodoro + Basil -> Stone Oven',
+    stepsText: 'Dough + Pomodoro + Basil -> 420°C Oven',
     accent: '#d8572a',
   },
   funghi_flatbread: {
     id: 'funghi_flatbread',
     name: 'Wood-Fired Funghi',
-    shortName: 'Funghi Flatbread',
-    price: 40,
+    shortName: 'Funghi Pie',
+    price: 42,
     patienceSec: 70,
     components: ['baked_funghi'],
     rawPieParts: ['dough', 'pomodoro_sauce', 'chopped_mushroom'],
     displaySteps: ['dough', 'pomodoro_sauce', 'chopped_mushroom'],
     ovenRecipe: true,
-    stepsText: 'Dough + Pomodoro + Sliced Porcini -> Oven',
+    stepsText: 'Dough + Pomodoro + Porcini -> 420°C Oven',
     accent: '#a35d35',
+  },
+  citrus_salmon: {
+    id: 'citrus_salmon',
+    name: 'Amalfi Citrus Salmon',
+    shortName: 'Citrus Salmon',
+    price: 48,
+    patienceSec: 66,
+    components: ['seared_salmon', 'saffron_glaze', 'chopped_basil'],
+    ovenRecipe: false,
+    stepsText: 'Sear Salmon + Saffron Glaze + Basil',
+    accent: '#d46237',
+  },
+  salmon_pasta: {
+    id: 'salmon_pasta',
+    name: 'Saffron Salmon Pasta',
+    shortName: 'Salmon Pasta',
+    price: 52,
+    patienceSec: 70,
+    components: ['seared_salmon', 'boiled_pasta', 'saffron_glaze'],
+    ovenRecipe: false,
+    stepsText: 'Sear Salmon + Boil Pasta + Saffron Glaze',
+    accent: '#c45a2d',
   },
   seared_ribeye: {
     id: 'seared_ribeye',
     name: 'Seared Ribeye & Herb',
     shortName: 'Seared Ribeye',
-    price: 46,
+    price: 48,
     patienceSec: 68,
     components: ['seared_steak', 'sauteed_mushroom', 'chopped_basil'],
     ovenRecipe: false,
@@ -226,32 +304,34 @@ export const RECIPES = {
     id: 'chefs_tasting',
     name: "Chef's Tasting Plate",
     shortName: 'Tasting Plate',
-    price: 62,
+    price: 64,
     patienceSec: 78,
     components: ['seared_steak', 'boiled_pasta', 'pomodoro_sauce', 'chopped_basil'],
     ovenRecipe: false,
-    vipOnly: false,
-    stepsText: 'Seared Ribeye + Pasta + Pomodoro + Basil',
-    accent: '#c98b24',
+    stepsText: 'Ribeye + Pasta + Pomodoro + Basil',
+    accent: '#b87d1a',
+  },
+  surf_and_turf: {
+    id: 'surf_and_turf',
+    name: 'Grand Surf & Turf',
+    shortName: 'Surf & Turf',
+    price: 74,
+    patienceSec: 82,
+    components: ['seared_steak', 'seared_salmon', 'saffron_glaze', 'chopped_basil'],
+    ovenRecipe: false,
+    stepsText: 'Ribeye + Salmon + Saffron Glaze + Basil',
+    accent: '#a33c26',
   },
 };
 
 export const RECIPE_LIST = Object.values(RECIPES);
 
 export function createIngredientItem(ingredientId, perfect = false) {
-  return {
-    kind: 'ingredient',
-    id: ingredientId,
-    perfect,
-  };
+  return { kind: 'ingredient', id: ingredientId, perfect };
 }
 
 export function createRawPie(parts, perfect = false) {
-  return {
-    kind: 'raw_pie',
-    parts: [...new Set(parts)],
-    perfect,
-  };
+  return { kind: 'raw_pie', parts: [...new Set(parts)], perfect };
 }
 
 export function createPlate(parts = [], perfect = false) {
@@ -353,12 +433,11 @@ export function describeItem(item) {
   if (!item) return 'Empty Hands';
   if (item.kind === 'ingredient') {
     const info = INGREDIENTS[item.id];
-    const star = item.perfect ? ' ★' : '';
-    return `${info ? info.name : item.id}${star}`;
+    return `${info ? info.name : item.id}${item.perfect ? ' ★' : ''}`;
   }
   if (item.kind === 'raw_pie') {
     const prog = findRawPieProgress(item);
-    if (prog?.readyForOven) return `Raw ${prog.recipe.shortName} (Bake in Oven)`;
+    if (prog?.readyForOven) return `Raw ${prog.recipe.shortName} (420°C Oven)`;
     const need = prog?.missing?.[0] ? INGREDIENTS[prog.missing[0]]?.short : 'Topping';
     return `Flatbread Dough (+ ${need})`;
   }

@@ -1,16 +1,19 @@
-// Ember & Basil main game bootstrap, fixed-timestep loop, keyboard & mouse input routing, and shot mode hook.
+// Ember & Basil main game loop: dual-chef brigade (Tab), 3 biomes, kitchen upgrades, keyboard + mouse input, and shot hook.
 
 import { createAudioEngine } from './audio.js';
 import {
   commandChefToPoint,
   commandChefToStation,
-  createChef,
+  createBrigade,
+  getActiveChef,
   selectTargetStation,
+  switchActiveChef,
   triggerChefDash,
   updateChefMovement,
 } from './chef.js';
-import { CANVAS_HEIGHT, CANVAS_WIDTH, FIXED_STEP, SHIFTS } from './config.js';
+import { CANVAS_HEIGHT, CANVAS_WIDTH, FIXED_STEP, SHIFTS, TILE_SIZE } from './config.js';
 import { advanceChopping, interactWithStation, updateKitchenStations } from './cooking.js';
+import { createDiningRoom, updateDiningGuests } from './diners.js';
 import { createKitchen, getStationAt, STATION_TYPES, tileFromPointer } from './kitchen.js';
 import { createOrderSystem, isFeverActive, spawnOrderTicket, updateOrders } from './orders.js';
 import { bindParticleHelpers, createParticleSystem, updateParticles } from './particles.js';
@@ -18,29 +21,31 @@ import { createRng } from './random.js';
 import { renderGame, SCREEN_MODES } from './renderer.js';
 import { INGREDIENTS } from './recipes.js';
 import { stageDeterministicShot } from './shots.js';
+import { createProceduralTextures } from './textures.js';
+import { createUpgradeState, getUpgradeModifiers, purchaseKitchenUpgrade } from './upgrades.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 
 const audio = createAudioEngine();
+const persistentUpgrades = createUpgradeState();
+const sharedTextures = createProceduralTextures(TILE_SIZE);
 
 const keysDown = new Set();
-let pointerX = -1;
-let pointerY = -1;
 let lastUrgentSecond = -1;
-
 let state = null;
 
 function createLiveState(shiftIndex = 0, screen = SCREEN_MODES.TITLE) {
   const shift = SHIFTS[shiftIndex];
   const rng = createRng(Date.now() % 100000);
   const kitchen = createKitchen();
-  const chef = createChef();
-  const orders = createOrderSystem(shift, rng);
+  const brigade = createBrigade();
+  const mods = getUpgradeModifiers(persistentUpgrades);
+  const orders = createOrderSystem(shift, rng, mods);
+  const diningRoom = createDiningRoom();
   const fx = createParticleSystem();
   const fxHelpers = bindParticleHelpers(fx);
 
-  // Open the ticket rail with two immediate orders so the kitchen starts bustling on frame 1
   spawnOrderTicket(orders, shift.menu[0], false);
   spawnOrderTicket(orders, shift.menu[1], false);
 
@@ -51,8 +56,12 @@ function createLiveState(shiftIndex = 0, screen = SCREEN_MODES.TITLE) {
     shiftElapsed: 0,
     shiftDuration: shift.durationSec,
     kitchen,
-    chef,
+    brigade,
+    upgrades: persistentUpgrades,
+    mods,
     orders,
+    diningRoom,
+    textures: sharedTextures,
     fx,
     fxHelpers,
     audio,
@@ -60,6 +69,7 @@ function createLiveState(shiftIndex = 0, screen = SCREEN_MODES.TITLE) {
     targetStation: null,
     ticketBounds: [],
     hudButtons: [],
+    brigadeButtons: [],
     titleButtons: [],
     overlayButtons: [],
   };
@@ -97,15 +107,17 @@ function hitTestButtons(list, x, y) {
 
 function handleInteractAction() {
   if (state.screen !== SCREEN_MODES.PLAYING) return;
-  const target = selectTargetStation(state.chef, state.kitchen, state.hoveredStation);
+  const activeChef = getActiveChef(state.brigade);
+  const target = selectTargetStation(activeChef, state.kitchen, state.hoveredStation);
   if (!target) return;
   const acted = interactWithStation(
     target,
-    state.chef,
+    activeChef,
     state.kitchen,
     state.orders,
     state.fxHelpers,
     audio,
+    { mods: state.mods, diningRoom: state.diningRoom },
   );
   if (
     acted &&
@@ -113,22 +125,25 @@ function handleInteractAction() {
     target.item?.kind === 'ingredient' &&
     INGREDIENTS[target.item.id]?.choppable
   ) {
-    state.chef.autoChoppingStation = target;
+    activeChef.autoChoppingStation = target;
   }
 }
 
 function handleQuickDropOrToss() {
-  if (state.screen !== SCREEN_MODES.PLAYING || !state.chef.heldItem) return;
-  const target = selectTargetStation(state.chef, state.kitchen, state.hoveredStation);
+  const activeChef = getActiveChef(state.brigade);
+  if (state.screen !== SCREEN_MODES.PLAYING || !activeChef.heldItem) return;
+  const target = selectTargetStation(activeChef, state.kitchen, state.hoveredStation);
   if (target && target.type === STATION_TYPES.COMPOST) {
-    interactWithStation(target, state.chef, state.kitchen, state.orders, state.fxHelpers, audio);
+    interactWithStation(target, activeChef, state.kitchen, state.orders, state.fxHelpers, audio, {
+      mods: state.mods,
+      diningRoom: state.diningRoom,
+    });
     return;
   }
-  // Quick-clear burnt items anywhere so mistakes never slow the rush
-  if (state.chef.heldItem.kind === 'ingredient' && state.chef.heldItem.id === 'burnt') {
-    state.chef.heldItem = null;
+  if (activeChef.heldItem.kind === 'ingredient' && activeChef.heldItem.id === 'burnt') {
+    activeChef.heldItem = null;
     audio.playTrash();
-    state.fxHelpers.spawnPopup(state.chef.x, state.chef.y - 34, 'Tossed Burnt Item', '#d9cbb3', 13);
+    state.fxHelpers.spawnPopup(activeChef.x, activeChef.y - 34, 'Tossed Burnt Item', '#d9cbb3', 13);
   }
 }
 
@@ -145,7 +160,7 @@ function readMovementInput() {
 function handleKeyDown(evt) {
   audio.unlock();
   const code = evt.code;
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(code)) {
     evt.preventDefault();
   }
 
@@ -171,9 +186,19 @@ function handleKeyDown(evt) {
     return;
   }
 
+  if (code === 'KeyU') {
+    if (state.screen === SCREEN_MODES.PLAYING) state.screen = SCREEN_MODES.UPGRADES;
+    else if (state.screen === SCREEN_MODES.UPGRADES) state.screen = SCREEN_MODES.PLAYING;
+    return;
+  }
+
   if (code === 'KeyP' || code === 'Escape') {
     if (state.screen === SCREEN_MODES.PLAYING) state.screen = SCREEN_MODES.PAUSED;
-    else if (state.screen === SCREEN_MODES.PAUSED || state.screen === SCREEN_MODES.RECIPES) {
+    else if (
+      state.screen === SCREEN_MODES.PAUSED ||
+      state.screen === SCREEN_MODES.RECIPES ||
+      state.screen === SCREEN_MODES.UPGRADES
+    ) {
       state.screen = SCREEN_MODES.PLAYING;
     }
     return;
@@ -191,11 +216,23 @@ function handleKeyDown(evt) {
   keysDown.add(code);
 
   if (!isRepeat) {
-    if (code === 'Space' || code === 'KeyE') {
+    if (code === 'Tab') {
+      const next = switchActiveChef(state.brigade);
+      audio.playPickup();
+      state.fxHelpers.spawnPopup(next.x, next.y - 36, next.name, next.routeColor, 13);
+    } else if (code === 'Space' || code === 'KeyE') {
       handleInteractAction();
     } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
+      const activeChef = getActiveChef(state.brigade);
       const vec = readMovementInput();
-      triggerChefDash(state.chef, vec.x, vec.y, state.fxHelpers, audio);
+      triggerChefDash(
+        activeChef,
+        vec.x,
+        vec.y,
+        state.fxHelpers,
+        audio,
+        state.mods.dashCooldownMult,
+      );
     } else if (code === 'KeyQ' || code === 'Backspace') {
       handleQuickDropOrToss();
     }
@@ -208,8 +245,6 @@ function handleKeyUp(evt) {
 
 function handlePointerMove(evt) {
   const pt = getCanvasPoint(evt);
-  pointerX = pt.x;
-  pointerY = pt.y;
   if (state.screen === SCREEN_MODES.PLAYING) {
     const tile = tileFromPointer(pt.x, pt.y);
     state.hoveredStation = tile ? getStationAt(state.kitchen, tile.col, tile.row) : null;
@@ -232,27 +267,67 @@ function handlePointerDown(evt) {
     return;
   }
 
-  if (state.screen === SCREEN_MODES.RECIPES || state.screen === SCREEN_MODES.PAUSED || state.screen === SCREEN_MODES.SUMMARY) {
+  if (
+    state.screen === SCREEN_MODES.RECIPES ||
+    state.screen === SCREEN_MODES.UPGRADES ||
+    state.screen === SCREEN_MODES.PAUSED ||
+    state.screen === SCREEN_MODES.SUMMARY
+  ) {
     const hit = hitTestButtons(state.overlayButtons, pt.x, pt.y);
     if (hit) {
-      if (hit.id === 'close_overlay' || hit.id === 'resume') state.screen = SCREEN_MODES.PLAYING;
-      else if (hit.id === 'restart') startShift(state.selectedShiftIndex);
-      else if (hit.id === 'next_shift') startShift(Math.min(SHIFTS.length - 1, state.selectedShiftIndex + 1));
-      else if (hit.id === 'title') state = createLiveState(state.selectedShiftIndex, SCREEN_MODES.TITLE);
+      if (hit.upgradeId) {
+        // Combine live score into bank if needed when upgrading mid-session
+        const total = state.upgrades.bank + state.orders.score;
+        const prevBank = state.upgrades.bank;
+        state.upgrades.bank = total;
+        if (purchaseKitchenUpgrade(state.upgrades, hit.upgradeId)) {
+          const spent = total - state.upgrades.bank;
+          if (spent <= prevBank) {
+            state.upgrades.bank = prevBank - spent;
+          } else {
+            state.orders.score = Math.max(0, state.orders.score - (spent - prevBank));
+            state.upgrades.bank = 0;
+          }
+          state.mods = getUpgradeModifiers(state.upgrades);
+          state.orders.upgradeMods = state.mods;
+          audio.playServeBell(true);
+        } else {
+          state.upgrades.bank = prevBank;
+          audio.playErrorBuzz();
+        }
+      } else if (hit.id === 'close_overlay' || hit.id === 'resume') {
+        state.screen = SCREEN_MODES.PLAYING;
+      } else if (hit.id === 'upgrades') {
+        state.screen = SCREEN_MODES.UPGRADES;
+      } else if (hit.id === 'restart') {
+        startShift(state.selectedShiftIndex);
+      } else if (hit.id === 'next_shift') {
+        startShift(Math.min(SHIFTS.length - 1, state.selectedShiftIndex + 1));
+      } else if (hit.id === 'title') {
+        state = createLiveState(state.selectedShiftIndex, SCREEN_MODES.TITLE);
+      }
     }
     return;
   }
 
-  // Playing mode: check HUD buttons first
+  // Playing mode: check HUD utility buttons
   const hudHit = hitTestButtons(state.hudButtons, pt.x, pt.y);
   if (hudHit) {
     if (hudHit.id === 'recipes') state.screen = SCREEN_MODES.RECIPES;
+    else if (hudHit.id === 'upgrades') state.screen = SCREEN_MODES.UPGRADES;
     else if (hudHit.id === 'mute') audio.toggleMute();
-    else if (hudHit.id === 'pause') state.screen = SCREEN_MODES.PAUSED;
     return;
   }
 
-  // Check Order Ticket click (focuses ticket & pulses matching stations)
+  // Click either Brigade Chef card in footer to swap instantly
+  const brigadeHit = hitTestButtons(state.brigadeButtons, pt.x, pt.y);
+  if (brigadeHit) {
+    state.brigade.activeIndex = brigadeHit.index;
+    audio.playPickup();
+    return;
+  }
+
+  // Click an Order Ticket to highlight it
   const ticketHit = hitTestButtons(state.ticketBounds, pt.x, pt.y);
   if (ticketHit) {
     state.orders.focusedTicketId = ticketHit.id;
@@ -261,27 +336,37 @@ function handlePointerDown(evt) {
     return;
   }
 
-  // Right-click = Quick Dash toward cursor!
+  const activeChef = getActiveChef(state.brigade);
+
+  // Clicking directly on the inactive chef swaps control to them!
+  for (let i = 0; i < state.brigade.chefs.length; i++) {
+    const c = state.brigade.chefs[i];
+    if (i !== state.brigade.activeIndex && Math.hypot(pt.x - c.x, pt.y - c.y) <= 30) {
+      state.brigade.activeIndex = i;
+      audio.playPickup();
+      return;
+    }
+  }
+
+  // Right-click = Quick Dash toward cursor
   if (evt.button === 2) {
     triggerChefDash(
-      state.chef,
-      pt.x - state.chef.x,
-      pt.y - state.chef.y,
+      activeChef,
+      pt.x - activeChef.x,
+      pt.y - activeChef.y,
       state.fxHelpers,
       audio,
+      state.mods.dashCooldownMult,
     );
     return;
   }
 
-  // Left-click kitchen station -> smart pathfind & interact (or walk to floor tile!)
+  // Left-click station -> smart route & interact (other chef keeps executing their queued route!)
   const tile = tileFromPointer(pt.x, pt.y);
   if (!tile) return;
   const st = getStationAt(state.kitchen, tile.col, tile.row);
-  if (st) {
-    commandChefToStation(state.chef, state.kitchen, st);
-  } else {
-    commandChefToPoint(state.chef, state.kitchen, pt.x, pt.y);
-  }
+  if (st) commandChefToStation(activeChef, state.kitchen, st);
+  else commandChefToPoint(activeChef, state.kitchen, pt.x, pt.y);
 }
 
 function stepLiveSimulation(dt) {
@@ -301,61 +386,76 @@ function stepLiveSimulation(dt) {
     }
   }
   if (remaining <= 0) {
+    state.upgrades.bank += state.orders.score;
     state.screen = SCREEN_MODES.SUMMARY;
     audio.playFeverFanfare();
     return;
   }
 
   const inputVec = readMovementInput();
-  const arrivedStation = updateChefMovement(
-    state.chef,
-    state.kitchen,
-    inputVec,
-    dt,
-    isFeverActive(state.orders),
-  );
+  const feverOn = isFeverActive(state.orders);
+  const activeChef = getActiveChef(state.brigade);
 
-  if (arrivedStation) {
-    const acted = interactWithStation(
-      arrivedStation,
-      state.chef,
+  // Update BOTH chefs simultaneously (active chef takes keyboard/mouse, partner finishes queued routes & chopping!)
+  for (const chef of state.brigade.chefs) {
+    const vec = chef === activeChef ? inputVec : { x: 0, y: 0 };
+    const arrivedStation = updateChefMovement(
+      chef,
       state.kitchen,
-      state.orders,
-      state.fxHelpers,
-      audio,
+      vec,
+      dt,
+      feverOn,
+      state.mods.moveSpeedMult,
     );
+
+    if (arrivedStation) {
+      const acted = interactWithStation(
+        arrivedStation,
+        chef,
+        state.kitchen,
+        state.orders,
+        state.fxHelpers,
+        audio,
+        { mods: state.mods, diningRoom: state.diningRoom },
+      );
+      if (
+        acted &&
+        arrivedStation.type === STATION_TYPES.CHOP &&
+        arrivedStation.item?.kind === 'ingredient' &&
+        INGREDIENTS[arrivedStation.item.id]?.choppable
+      ) {
+        chef.autoChoppingStation = arrivedStation;
+      }
+    }
+
+    const holdingKey = chef === activeChef && (keysDown.has('Space') || keysDown.has('KeyE'));
+    const chopCandidate = holdingKey
+      ? selectTargetStation(chef, state.kitchen, state.hoveredStation)
+      : chef.autoChoppingStation;
+
     if (
-      acted &&
-      arrivedStation.type === STATION_TYPES.CHOP &&
-      arrivedStation.item?.kind === 'ingredient' &&
-      INGREDIENTS[arrivedStation.item.id]?.choppable
+      chopCandidate &&
+      chopCandidate.type === STATION_TYPES.CHOP &&
+      chopCandidate.item?.kind === 'ingredient' &&
+      INGREDIENTS[chopCandidate.item.id]?.choppable &&
+      !chef.heldItem
     ) {
-      state.chef.autoChoppingStation = arrivedStation;
+      const kept = advanceChopping(
+        chopCandidate,
+        chef,
+        dt,
+        state.fxHelpers,
+        audio,
+        0,
+        state.mods.chopSpeedMult,
+      );
+      if (!kept || chopCandidate.chopProgress === 0) chef.autoChoppingStation = null;
+    } else {
+      chef.autoChoppingStation = null;
     }
   }
 
-  // Continuous smooth chopping while holding Space/E OR after mouse-clicking a chop board
-  state.targetStation = selectTargetStation(state.chef, state.kitchen, state.hoveredStation);
-  const holdingChopKey = keysDown.has('Space') || keysDown.has('KeyE');
-  const chopCandidate = holdingChopKey
-    ? state.targetStation
-    : state.chef.autoChoppingStation;
-
-  if (
-    chopCandidate &&
-    chopCandidate.type === STATION_TYPES.CHOP &&
-    chopCandidate.item?.kind === 'ingredient' &&
-    INGREDIENTS[chopCandidate.item.id]?.choppable &&
-    !state.chef.heldItem
-  ) {
-    const kept = advanceChopping(chopCandidate, state.chef, dt, state.fxHelpers, audio, 0);
-    if (!kept || chopCandidate.chopProgress === 0) {
-      state.chef.autoChoppingStation = null;
-    }
-  } else {
-    state.chef.autoChoppingStation = null;
-  }
-
+  state.targetStation = selectTargetStation(activeChef, state.kitchen, state.hoveredStation);
   updateKitchenStations(state.kitchen, dt, state.fxHelpers, audio);
   updateOrders(state.orders, dt, state.shiftElapsed, state.shiftDuration, {
     onTicketSpawned(ticket) {
@@ -369,6 +469,7 @@ function stepLiveSimulation(dt) {
       audio.playFeverFanfare();
     },
   });
+  updateDiningGuests(state.diningRoom, dt);
   updateParticles(state.fx, dt);
 }
 

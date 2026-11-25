@@ -423,6 +423,137 @@ export function drawIngredientArt(ctx, ingredientId, x, y, radius = 20) {
       break;
     }
 
+    case 'salmon': {
+      drawEllipseShadow(ctx, 1, 5, 16, 10, 0.24);
+      const grad = ctx.createLinearGradient(-15, -8, 15, 10);
+      grad.addColorStop(0, '#ff9d78');
+      grad.addColorStop(0.55, '#f06e48');
+      grad.addColorStop(1, '#c94c2c');
+      ctx.fillStyle = grad;
+      ctx.strokeStyle = '#ffd9c7';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-15, 2);
+      ctx.quadraticCurveTo(-8, -11, 13, -7);
+      ctx.quadraticCurveTo(17, 2, 10, 10);
+      ctx.quadraticCurveTo(-8, 11, -15, 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // Delicate white salmon marbling stripes
+      ctx.strokeStyle = 'rgba(255, 240, 232, 0.72)';
+      ctx.lineWidth = 1.4;
+      for (const sx of [-8, -2, 4, 10]) {
+        ctx.beginPath();
+        ctx.moveTo(sx - 2, -6);
+        ctx.quadraticCurveTo(sx + 1, 0, sx - 1, 8);
+        ctx.stroke();
+      }
+      break;
+    }
+
+    case 'seared_salmon': {
+      drawEllipseShadow(ctx, 1, 5, 16, 10, 0.28);
+      const grad = ctx.createLinearGradient(-15, -8, 15, 10);
+      grad.addColorStop(0, '#ffaa6b');
+      grad.addColorStop(0.5, '#e36a36');
+      grad.addColorStop(1, '#9e3b18');
+      ctx.fillStyle = grad;
+      ctx.strokeStyle = '#63250e';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-15, 2);
+      ctx.quadraticCurveTo(-8, -11, 13, -7);
+      ctx.quadraticCurveTo(17, 2, 10, 10);
+      ctx.quadraticCurveTo(-8, 11, -15, 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // Golden crispy sear lines
+      ctx.strokeStyle = 'rgba(84, 30, 10, 0.72)';
+      ctx.lineWidth = 1.8;
+      for (const sx of [-7, -1, 5]) {
+        ctx.beginPath();
+        ctx.moveTo(sx - 2, -6);
+        ctx.lineTo(sx + 3, 7);
+        ctx.stroke();
+      }
+      // Bright Amalfi lemon slice crown
+      ctx.fillStyle = '#ffe552';
+      ctx.strokeStyle = '#e0a914';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(5, -2, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#fff9c4';
+      ctx.beginPath();
+      ctx.arc(5, -2, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+
+    case 'saffron': {
+      drawEllipseShadow(ctx, 1, 5, 14, 10, 0.22);
+      // Bright Amalfi lemon half
+      ctx.fillStyle = '#ffd93b';
+      ctx.strokeStyle = '#c49014';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.ellipse(-4, 1, 10, 8.5, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#fff6bd';
+      ctx.beginPath();
+      ctx.ellipse(-4, 1, 7, 5.8, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+      // Crimson-gold saffron threads beside lemon
+      ctx.strokeStyle = '#d93d1a';
+      ctx.lineWidth = 1.8;
+      for (const [ox, oy, rot] of [
+        [8, -4, 0.4],
+        [10, 2, -0.3],
+        [7, 6, 0.7],
+      ]) {
+        ctx.save();
+        ctx.translate(ox, oy);
+        ctx.rotate(rot);
+        ctx.beginPath();
+        ctx.moveTo(-4, 0);
+        ctx.quadraticCurveTo(0, -3, 5, 1);
+        ctx.stroke();
+        ctx.restore();
+      }
+      break;
+    }
+
+    case 'saffron_glaze': {
+      drawEllipseShadow(ctx, 1, 4, 15, 11, 0.22);
+      const grad = ctx.createRadialGradient(-3, -3, 2, 0, 0, 15);
+      grad.addColorStop(0, '#ffea75');
+      grad.addColorStop(0.6, '#f2b724');
+      grad.addColorStop(1, '#b8760d');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 15.5, 12.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Cream velvet swirl + saffron threads
+      ctx.strokeStyle = 'rgba(255, 250, 224, 0.75)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.5, 0.3, 3.9);
+      ctx.stroke();
+      ctx.strokeStyle = '#d9381e';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(-4, -3);
+      ctx.lineTo(2, -1);
+      ctx.moveTo(1, 3);
+      ctx.lineTo(6, 1);
+      ctx.stroke();
+      break;
+    }
+
     case 'burnt': {
       drawEllipseShadow(ctx, 1, 5, 14, 10, 0.3);
       ctx.fillStyle = '#292321';
@@ -605,9 +736,21 @@ export function drawDishPreview(ctx, dishId, x, y, radius = 24, perfect = false)
       drawIngredientArt(ctx, 'chopped_basil', 0, -3, 12);
       break;
     }
+    case 'saffron_crostini': {
+      drawIngredientArt(ctx, 'toasted_bread', 0, 1, 22);
+      drawIngredientArt(ctx, 'saffron_glaze', 0, -1, 15);
+      drawIngredientArt(ctx, 'chopped_basil', 1, -3, 11);
+      break;
+    }
     case 'pomodoro_pasta': {
       drawIngredientArt(ctx, 'boiled_pasta', 0, 1, 21);
       drawIngredientArt(ctx, 'pomodoro_sauce', 0, -1, 14);
+      drawIngredientArt(ctx, 'chopped_basil', 1, -3, 11);
+      break;
+    }
+    case 'saffron_pasta': {
+      drawIngredientArt(ctx, 'boiled_pasta', 0, 1, 21);
+      drawIngredientArt(ctx, 'saffron_glaze', 0, -1, 14.5);
       drawIngredientArt(ctx, 'chopped_basil', 1, -3, 11);
       break;
     }
@@ -625,6 +768,18 @@ export function drawDishPreview(ctx, dishId, x, y, radius = 24, perfect = false)
       drawWoodFiredFlatbread(ctx, true, true);
       break;
     }
+    case 'citrus_salmon': {
+      drawIngredientArt(ctx, 'saffron_glaze', 0, 3, 19);
+      drawIngredientArt(ctx, 'seared_salmon', 0, -1, 20);
+      drawIngredientArt(ctx, 'chopped_basil', -6, -4, 10);
+      break;
+    }
+    case 'salmon_pasta': {
+      drawIngredientArt(ctx, 'boiled_pasta', 5, 3, 17);
+      drawIngredientArt(ctx, 'saffron_glaze', 5, 2, 11);
+      drawIngredientArt(ctx, 'seared_salmon', -6, -2, 17);
+      break;
+    }
     case 'seared_ribeye': {
       drawIngredientArt(ctx, 'sauteed_mushroom', 7, 5, 14);
       drawIngredientArt(ctx, 'seared_steak', -3, -2, 20);
@@ -636,6 +791,13 @@ export function drawDishPreview(ctx, dishId, x, y, radius = 24, perfect = false)
       drawIngredientArt(ctx, 'pomodoro_sauce', 7, 2, 10);
       drawIngredientArt(ctx, 'seared_steak', -7, -2, 17);
       drawIngredientArt(ctx, 'chopped_basil', 0, -4, 11);
+      break;
+    }
+    case 'surf_and_turf': {
+      drawIngredientArt(ctx, 'saffron_glaze', 0, 4, 18);
+      drawIngredientArt(ctx, 'seared_steak', -7, -2, 16.5);
+      drawIngredientArt(ctx, 'seared_salmon', 8, 2, 16);
+      drawIngredientArt(ctx, 'chopped_basil', 0, -5, 10.5);
       break;
     }
     default:
@@ -714,9 +876,11 @@ export function drawKitchenItem(ctx, item, x, y, radius = 26, showAssemblyBadge 
       'toasted_bread',
       'boiled_pasta',
       'pomodoro_sauce',
+      'saffron_glaze',
       'sauteed_mushroom',
       'chopped_tomato',
       'seared_steak',
+      'seared_salmon',
       'chopped_basil',
     ];
     for (const part of order) {
@@ -724,15 +888,20 @@ export function drawKitchenItem(ctx, item, x, y, radius = 26, showAssemblyBadge 
       let ox = 0;
       let oy = 0;
       let pr = radius * 0.72;
-      if (part === 'pomodoro_sauce') pr = radius * 0.52;
+      if (part === 'pomodoro_sauce' || part === 'saffron_glaze') pr = radius * 0.54;
       if (part === 'chopped_basil') {
         oy = -3;
         pr = radius * 0.44;
       }
-      if (part === 'seared_steak' && item.parts.includes('boiled_pasta')) {
+      if (part === 'seared_steak' && (item.parts.includes('boiled_pasta') || item.parts.includes('seared_salmon'))) {
         ox = -6;
         oy = -2;
         pr = radius * 0.62;
+      }
+      if (part === 'seared_salmon' && (item.parts.includes('boiled_pasta') || item.parts.includes('seared_steak'))) {
+        ox = 6;
+        oy = 2;
+        pr = radius * 0.6;
       }
       drawIngredientArt(ctx, part, x + ox, y + oy, pr);
     }
