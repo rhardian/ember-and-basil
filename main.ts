@@ -19,16 +19,19 @@ const GATE_CAPS = {
   game_path_max_bytes: 1000,
 } as const;
 
-function makeReadable(targetPath: string): void {
+function ensureChildrenReadable(dirPath: string): void {
   if (process.platform === 'win32') return;
-  const info = statSync(targetPath);
-  if (info.isDirectory()) {
-    chmodSync(targetPath, 0o755);
-    for (const entry of readdirSync(targetPath)) {
-      makeReadable(join(targetPath, entry));
+  for (const entry of readdirSync(dirPath)) {
+    const child = join(dirPath, entry);
+    const info = statSync(child);
+    try {
+      chmodSync(child, info.isDirectory() ? 0o755 : 0o644);
+    } catch {
+      // Ignore if filesystem restricts chmod on pre-existing mount points.
     }
-  } else {
-    chmodSync(targetPath, 0o644);
+    if (info.isDirectory()) {
+      ensureChildrenReadable(child);
+    }
   }
 }
 
@@ -45,7 +48,7 @@ function packageEntry(): void {
 
   const dossierBytes = buildDossier(OUTPUT_DIR, GATE_CAPS);
   writeFileSync(join(OUTPUT_DIR, 'dossier.json'), dossierBytes);
-  makeReadable(OUTPUT_DIR);
+  ensureChildrenReadable(OUTPUT_DIR);
 }
 
 packageEntry();
